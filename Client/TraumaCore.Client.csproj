@@ -43,6 +43,7 @@
 
   <PropertyGroup>
     <InstallDir>$(SptRoot)\BepInEx\plugins\Hysocs-TraumaCore</InstallDir>
+    <LicenseFile>$(MSBuildProjectDirectory)\..\LICENSE</LicenseFile>
     <PackageRoot>$(MSBuildProjectDirectory)\..\dist\TraumaCore-$(Version)</PackageRoot>
     <PackageZip>$(MSBuildProjectDirectory)\..\dist\TraumaCore-$(Version).zip</PackageZip>
   </PropertyGroup>
@@ -57,6 +58,7 @@
     <Delete Files="$(PackageZip)" />
     <MakeDir Directories="$(PackageRoot)\BepInEx\plugins\Hysocs-TraumaCore" />
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PackageRoot)\BepInEx\plugins\Hysocs-TraumaCore" />
+    <Copy SourceFiles="$(LicenseFile)" DestinationFolder="$(PackageRoot)\BepInEx\plugins\Hysocs-TraumaCore" />
     <ZipDirectory SourceDirectory="$(PackageRoot)" DestinationFile="$(PackageZip)" Overwrite="true" />
     <Message Importance="high" Text="TraumaCore release package created: $(PackageZip)" />
   </Target>
