@@ -309,7 +309,6 @@ namespace TraumaCore
             float denominator = a * c - b * b;
             float s = denominator > 0.000001f ? Mathf.Clamp01((b * e - c * d) / denominator) : 0f;
             float t = c > 0.000001f ? Mathf.Clamp01((b * s + e) / c) : 0f;
-            // Re-clamp the shot coordinate after clamping the bone coordinate.
             s = a > 0.000001f ? Mathf.Clamp01((b * t - d) / a) : 0f;
             Vector3 onShot = shotStart + u * s;
             Vector3 onBone = boneStart + v * t;
@@ -368,10 +367,6 @@ namespace TraumaCore
                 LeftFoot = LeftFoot != null ? LeftFoot : FindBone(skeleton, "HumanLFoot", "LeftFoot", "LFoot");
                 RightFoot = RightFoot != null ? RightFoot : FindBone(skeleton, "HumanRFoot", "RightFoot", "RFoot");
 
-                // Some EFT body prefabs expose these transforms in the hierarchy
-                // with prefixes (for example "Base HumanLForearm1") but omit
-                // them from SkeletonRootJoint.Bones. Match by name suffix once
-                // and retain the result in this per-player cache.
                 Transform[] hierarchy = null;
                 if (LeftElbow == null || RightElbow == null || LeftCalf == null ||
                     RightCalf == null || LeftFoot == null || RightFoot == null)

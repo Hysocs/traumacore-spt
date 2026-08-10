@@ -43,8 +43,6 @@ namespace TraumaCore.Patches
                 return;
             try
             {
-                // Player.OnDead has finished its own sound handling, so this
-                // cannot be immediately cancelled by Speaker.Shut().
                 __instance.Speaker.Play(_replacementPhrase,
                     __instance.HealthStatus, true, null);
             }

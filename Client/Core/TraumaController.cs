@@ -633,8 +633,6 @@ namespace TraumaCore
         private void UpdateBruising()
         {
             if (_player == null || _player.Physical == null) return;
-            // Remove our previous additive contribution before recalculating it,
-            // preserving stimulants and other mods that also use RestoreRateBuff.
             if (!Mathf.Approximately(_appliedRestorePenalty, 0f))
                 _player.Physical.RestoreRateBuff -= _appliedRestorePenalty;
             float remaining = Mathf.Clamp01((_bruiseExpires - Time.unscaledTime) / BruiseDuration);
@@ -659,8 +657,6 @@ namespace TraumaCore
         {
             if (damage <= 0f || !IsHealthAlive()) return;
 
-            // A blacked non-vital source forwards all future primary damage up
-            // its explicit bypass path. It no longer emits normal shared damage.
             if (_health.IsBodyPartDestroyed(source))
             {
                 EBodyPart bypass = GetBypassTarget(source);
@@ -670,8 +666,6 @@ namespace TraumaCore
                 return;
             }
 
-            // Capture the share before primary damage is applied. A part that is
-            // blacked by this tick begins 100% bypass on the following tick.
             float sharedPool = damage * GetShareFraction(source) *
                 GetLinkageMultiplier(source);
             ApplyTraumaDamage(source, damage, damageInfo);
@@ -691,8 +685,6 @@ namespace TraumaCore
             DamageInfo damageInfo, int crossedBlackedParts)
         {
             if (damage <= 0f || !IsHealthAlive()) return;
-            // Shared damage is terminal: it never shares again. A blacked
-            // destination may only walk its acyclic upward bypass path.
             int guard = 0;
             while (IsHealthAlive() && target != EBodyPart.Common &&
                 _health.IsBodyPartDestroyed(target) && guard++ < 4)
@@ -733,9 +725,6 @@ namespace TraumaCore
             }
             catch (System.NullReferenceException) when (!IsHealthAlive())
             {
-                // EFT may dismantle animation/health presentation synchronously
-                // when this exact damage call becomes lethal. The damage and
-                // death have already been committed; do not continue the tick.
             }
             finally
             {
@@ -838,8 +827,6 @@ namespace TraumaCore
                 ActiveHealthController.LightBleeding bleed =
                     _health.FindExistingEffect<ActiveHealthController.LightBleeding>(pair.Key);
                 if (bleed != null)
-                    // Marker exists for EFT treatment/UI; custom trauma owns the
-                    // actual damage so several limb markers do not each damage all parts.
                     bleed.float_15 = 0f;
             }
         }
@@ -870,8 +857,6 @@ namespace TraumaCore
 
             EBodyPart bodyPart = removedEffect.BodyPart;
 
-            // The chest heavy-bleed marker represents the permanent heart wound.
-            // Medical treatment may remove EFT's marker, but never the wound itself.
             if (bodyPart == EBodyPart.Chest && removedEffect is IHeavyBleeding && _heartWound)
                 return;
 
@@ -930,9 +915,6 @@ namespace TraumaCore
                     _bloodVisualHitCounts[((int)EBodyPart.Chest << 1) | 1] =
                         Mathf.Max(1, _heartWounds);
 
-                // All ordinary wounds are linked for treatment. Remove their
-                // remaining UI markers as one operation; the permanent heart
-                // hemorrhage is restored below after event suppression ends.
                 List<IHealthEffect> effects = new List<IHealthEffect>(_health.GetAllActiveEffects());
                 for (int i = 0; i < effects.Count; i++)
                     if ((effects[i] is ILightBleeding || effects[i] is IHeavyBleeding) &&
