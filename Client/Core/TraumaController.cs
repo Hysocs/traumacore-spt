@@ -11,11 +11,39 @@ namespace TraumaCore
 {
     internal sealed class TraumaController : MonoBehaviour
     {
-        private sealed class BodyWoundTrack
+        private sealed class WoundTrack
         {
             internal int Count;
             internal float Effective;
             internal float LastWoundTime = float.MinValue;
+            internal float LastInterval;
+            internal float LastSeverity = 1f;
+
+            internal bool Active { get { return Count > 0; } }
+
+            internal float Add(float originalDamage, float divisor, float scale = 1f)
+            {
+                float now = Time.unscaledTime;
+                float interval = now - LastWoundTime;
+                Count++;
+                LastWoundTime = now;
+                LastInterval = Count > 1 && interval > 0f ? interval : 0f;
+                LastSeverity = Mathf.Max(0f, originalDamage) /
+                    Mathf.Max(0.01f, divisor) * scale;
+                Effective += LastSeverity;
+                return LastSeverity;
+            }
+
+            internal bool Clear()
+            {
+                bool wasActive = Active;
+                Count = 0;
+                Effective = 0f;
+                LastWoundTime = float.MinValue;
+                LastInterval = 0f;
+                LastSeverity = 0f;
+                return wasActive;
+            }
         }
         internal struct DebugImpact
         {
@@ -54,20 +82,9 @@ namespace TraumaCore
         private const float TraumaStep = 1f / 60f;
         private const float PresentationInterval = 0.25f;
         private float _nextPresentationTime;
-        private int _chestStacks;
-        private float _effectiveChestStacks;
-        private float _lastChestWoundTime = float.MinValue;
-        private float _lastChestInterval;
-        private float _lastChestSeverity = 1f;
-        private bool _heartWound;
-        private int _heartWounds;
-        private float _effectiveHeartWounds;
-        private float _lastHeartWoundTime = float.MinValue;
-        private float _lastHeartInterval;
-        private float _lastHeartSeverity = 1f;
-        private int _faceWounds;
-        private float _effectiveFaceWounds;
-        private float _lastFaceWoundTime = float.MinValue;
+        private readonly WoundTrack _chestWounds = new WoundTrack();
+        private readonly WoundTrack _heartWounds = new WoundTrack();
+        private readonly WoundTrack _faceWounds = new WoundTrack();
         private bool _subscribed;
         private bool _addingMarker;
         private bool _bloodLossBlockerWasActive;
@@ -95,24 +112,24 @@ namespace TraumaCore
         private readonly Dictionary<int, int> _bloodVisualHitCounts =
             new Dictionary<int, int>();
         private readonly List<BodyRenderer> _bodyRenderers = new List<BodyRenderer>(12);
-        private readonly Dictionary<EBodyPart, BodyWoundTrack> _bodyWounds =
-            new Dictionary<EBodyPart, BodyWoundTrack>();
+        private readonly Dictionary<EBodyPart, WoundTrack> _bodyWounds =
+            new Dictionary<EBodyPart, WoundTrack>();
 
-        internal int ChestStacks { get { return _chestStacks; } }
-        internal float EffectiveChestStacks { get { return _effectiveChestStacks; } }
-        internal float LastChestInterval { get { return _lastChestInterval; } }
-        internal float LastChestSeverity { get { return _lastChestSeverity; } }
-        internal bool HasHeartWound { get { return _heartWound; } }
-        internal int HeartWounds { get { return _heartWounds; } }
-        internal float EffectiveHeartWounds { get { return _effectiveHeartWounds; } }
-        internal float LastHeartInterval { get { return _lastHeartInterval; } }
-        internal float LastHeartSeverity { get { return _lastHeartSeverity; } }
+        internal int ChestStacks { get { return _chestWounds.Count; } }
+        internal float EffectiveChestStacks { get { return _chestWounds.Effective; } }
+        internal float LastChestInterval { get { return _chestWounds.LastInterval; } }
+        internal float LastChestSeverity { get { return _chestWounds.LastSeverity; } }
+        internal bool HasHeartWound { get { return _heartWounds.Active; } }
+        internal int HeartWounds { get { return _heartWounds.Count; } }
+        internal float EffectiveHeartWounds { get { return _heartWounds.Effective; } }
+        internal float LastHeartInterval { get { return _heartWounds.LastInterval; } }
+        internal float LastHeartSeverity { get { return _heartWounds.LastSeverity; } }
         internal float BruiseStrength { get { return _currentBruiseStrength; } }
         internal float BruiseTimeLeft { get { return Mathf.Max(0f, _bruiseExpires - Time.unscaledTime); } }
-        internal int FaceWounds { get { return _faceWounds; } }
-        internal float EffectiveFaceWounds { get { return _effectiveFaceWounds; } }
-        internal float ChestDecayStrength { get { return GetDecayStrength(_lastChestWoundTime); } }
-        internal float FaceDecayStrength { get { return GetDecayStrength(_lastFaceWoundTime); } }
+        internal int FaceWounds { get { return _faceWounds.Count; } }
+        internal float EffectiveFaceWounds { get { return _faceWounds.Effective; } }
+        internal float ChestDecayStrength { get { return GetDecayStrength(_chestWounds.LastWoundTime); } }
+        internal float FaceDecayStrength { get { return GetDecayStrength(_faceWounds.LastWoundTime); } }
         internal bool TraumaDeathVoicePending { get { return _traumaDeathVoicePending; } }
         internal bool HeartDeathVoicePending
         { get { return _traumaDeathVoicePending && _heartDamageContext; } }
@@ -121,13 +138,13 @@ namespace TraumaCore
         internal void SetHeadDeathVoicePending(bool pending)
         { _headDeathVoicePending = pending; }
         internal int StomachWounds
-        { get { return _bodyWounds.TryGetValue(EBodyPart.Stomach, out BodyWoundTrack t) ? t.Count : 0; } }
+        { get { return _bodyWounds.TryGetValue(EBodyPart.Stomach, out WoundTrack t) ? t.Count : 0; } }
         internal int LimbWounds
         {
             get
             {
                 int count = 0;
-                foreach (KeyValuePair<EBodyPart, BodyWoundTrack> pair in _bodyWounds)
+                foreach (KeyValuePair<EBodyPart, WoundTrack> pair in _bodyWounds)
                     if (pair.Key != EBodyPart.Stomach) count += pair.Value.Count;
                 return count;
             }
@@ -140,18 +157,18 @@ namespace TraumaCore
             get
             {
                 if (_health == null) return 0f;
-                float treatableDps = _effectiveChestStacks * ChestDecayStrength;
-                if (_faceWounds > 0) treatableDps += _effectiveFaceWounds * FaceDecayStrength;
-                foreach (KeyValuePair<EBodyPart, BodyWoundTrack> pair in _bodyWounds)
+                float treatableDps = _chestWounds.Effective * ChestDecayStrength;
+                if (_faceWounds.Active) treatableDps += _faceWounds.Effective * FaceDecayStrength;
+                foreach (KeyValuePair<EBodyPart, WoundTrack> pair in _bodyWounds)
                 {
-                    BodyWoundTrack track = pair.Value;
+                    WoundTrack track = pair.Value;
                     if (track.Count <= 0) continue;
                     float primary = track.Effective * GetDecayStrength(track.LastWoundTime);
                     treatableDps += primary * (1f + GetShareFraction(pair.Key) *
                         GetLinkageMultiplier(pair.Key));
                 }
                 float dps = treatableDps * GetTreatableBleedMultiplier();
-                if (_heartWound) dps += _effectiveHeartWounds;
+                if (_heartWounds.Active) dps += _heartWounds.Effective;
                 return dps;
             }
         }
@@ -177,60 +194,51 @@ namespace TraumaCore
 
         internal void AddChestWound(float originalBulletDamage)
         {
-            if (_health == null) return;
-            _chestStacks++;
-            float now = Time.unscaledTime;
-            float interval = now - _lastChestWoundTime;
-            _lastChestWoundTime = now;
-            _lastChestInterval = _chestStacks > 1 && interval > 0f ? interval : 0f;
-            _lastChestSeverity = Mathf.Max(0f, originalBulletDamage) /
-                Mathf.Max(0.01f, OrganSystem.NormalBleedDivisor.Value);
-            _effectiveChestStacks += _lastChestSeverity;
-            AddDebugBloodSource(_lastChestSeverity, false, false, EBodyPart.Chest);
+            if (!AddWound(_chestWounds, EBodyPart.Chest, originalBulletDamage,
+                OrganSystem.NormalBleedDivisor.Value)) return;
             if (OrganSystem.DebugLogging.Value)
                 Plugin.Log.LogInfo(string.Format(
                     "[Trauma] Chest wound #{0}: interval={1:0.0}ms, added={2:0.00} HP/s, total={3:0.00} HP/s",
-                    _chestStacks, _lastChestInterval * 1000f,
-                    _lastChestSeverity, _effectiveChestStacks));
-            EnsureMarkers();
+                    _chestWounds.Count, _chestWounds.LastInterval * 1000f,
+                    _chestWounds.LastSeverity, _chestWounds.Effective));
         }
 
         internal void AddHeartWound(float originalBulletDamage)
         {
-            if (_health == null) return;
-            _heartWound = true;
-            float now = Time.unscaledTime;
-            float interval = now - _lastHeartWoundTime;
-            _heartWounds++;
-            _lastHeartWoundTime = now;
-            _lastHeartInterval = _heartWounds > 1 ? interval : 0f;
-            _lastHeartSeverity = Mathf.Max(0f, originalBulletDamage) /
-                Mathf.Max(0.01f, OrganSystem.HeartBleedDivisor.Value);
-            _effectiveHeartWounds += _lastHeartSeverity;
+            if (!AddWound(_heartWounds, EBodyPart.Chest, originalBulletDamage,
+                OrganSystem.HeartBleedDivisor.Value, 1f, true)) return;
             _heartWoundUiEffect = _health.FindExistingEffect<HeartWoundHealthEffect>(
                 EBodyPart.Chest);
             if (_heartWoundUiEffect == null)
                 _heartWoundUiEffect = _health.AddEffect<HeartWoundHealthEffect>(
                     EBodyPart.Chest, 0f, null, null, null);
-            AddDebugBloodSource(_lastHeartSeverity, true, false, EBodyPart.Chest);
             if (OrganSystem.DebugLogging.Value)
                 Plugin.Log.LogInfo(string.Format(
                     "[Trauma] Heart wound #{0}: interval={1:0.0}ms, added={2:0.00} HP/s, total={3:0.00} HP/s",
-                    _heartWounds, _lastHeartInterval * 1000f,
-                    _lastHeartSeverity, _effectiveHeartWounds));
-            EnsureMarkers();
+                    _heartWounds.Count, _heartWounds.LastInterval * 1000f,
+                    _heartWounds.LastSeverity, _heartWounds.Effective));
         }
 
         internal void AddFaceWound(float originalBulletDamage)
         {
-            if (_health == null) return;
-            _faceWounds++;
-            _lastFaceWoundTime = Time.unscaledTime;
-            float severity = Mathf.Max(0f, originalBulletDamage) /
-                Mathf.Max(0.01f, OrganSystem.HeadBleedDivisor.Value);
-            _effectiveFaceWounds += severity;
-            AddDebugBloodSource(severity, false, true, EBodyPart.Head);
-            EnsureMarkers();
+            AddWound(_faceWounds, EBodyPart.Head, originalBulletDamage,
+                OrganSystem.HeadBleedDivisor.Value, 1f, false, true);
+        }
+
+        internal void AddTreatableWound(EBodyPart bodyPart, float originalBulletDamage)
+        {
+            switch (bodyPart)
+            {
+                case EBodyPart.Head:
+                    AddFaceWound(originalBulletDamage);
+                    break;
+                case EBodyPart.Chest:
+                    AddChestWound(originalBulletDamage);
+                    break;
+                default:
+                    AddBodyWound(bodyPart, originalBulletDamage);
+                    break;
+            }
         }
 
         internal void AddFatalHeadBlood(float originalBulletDamage)
@@ -264,23 +272,28 @@ namespace TraumaCore
             if (_health == null || (bodyPart != EBodyPart.Stomach &&
                 bodyPart != EBodyPart.LeftArm && bodyPart != EBodyPart.RightArm &&
                 bodyPart != EBodyPart.LeftLeg && bodyPart != EBodyPart.RightLeg)) return;
-            if (!_bodyWounds.TryGetValue(bodyPart, out BodyWoundTrack track))
+            if (!_bodyWounds.TryGetValue(bodyPart, out WoundTrack track))
             {
-                track = new BodyWoundTrack();
+                track = new WoundTrack();
                 _bodyWounds.Add(bodyPart, track);
             }
-            track.Count++;
             float bodyScale = bodyPart == EBodyPart.Stomach ? 0.75f : 0.50f;
-            float severity = Mathf.Max(0f, originalBulletDamage) /
-                Mathf.Max(0.01f, OrganSystem.NormalBleedDivisor.Value) * bodyScale;
-            track.Effective += severity;
-            track.LastWoundTime = Time.unscaledTime;
-            AddDebugBloodSource(severity, false, false, bodyPart);
-            EnsureMarkers();
+            AddWound(track, bodyPart, originalBulletDamage,
+                OrganSystem.NormalBleedDivisor.Value, bodyScale);
             if (OrganSystem.DebugLogging.Value)
                 Plugin.Log.LogInfo(string.Format(
                     "[Trauma] {0} wound #{1}: effective={2:0.00} scale={3:0.00}",
                     bodyPart, track.Count, track.Effective, bodyScale));
+        }
+
+        private bool AddWound(WoundTrack track, EBodyPart bodyPart, float originalDamage,
+            float divisor, float scale = 1f, bool heart = false, bool head = false)
+        {
+            if (_health == null || track == null) return false;
+            float severity = track.Add(originalDamage, divisor, scale);
+            AddDebugBloodSource(severity, heart, head, bodyPart);
+            EnsureMarkers();
+            return true;
         }
 
         private static float GetDecayStrength(float lastWoundTime)
@@ -376,7 +389,7 @@ namespace TraumaCore
             if (bloodLossBlockerActive && !_bloodLossBlockerWasActive)
                 ClearLinkedTreatableBleeds();
             _bloodLossBlockerWasActive = bloodLossBlockerActive;
-            if (_chestStacks == 0 && !_heartWound && _faceWounds == 0 &&
+            if (!_chestWounds.Active && !_heartWounds.Active && !_faceWounds.Active &&
                 _bodyWounds.Count == 0) return;
             _traumaAccumulator += Time.deltaTime;
             if (_traumaAccumulator < TraumaStep) return;
@@ -385,11 +398,11 @@ namespace TraumaCore
             UpdateNativeBleedStrength();
 
             float treatableMultiplier = GetTreatableBleedMultiplier();
-            float damagePerSecond = _effectiveChestStacks * ChestDecayStrength * treatableMultiplier;
+            float damagePerSecond = _chestWounds.Effective * ChestDecayStrength * treatableMultiplier;
 
-            if (_heartWound) damagePerSecond += _effectiveHeartWounds;
+            if (_heartWounds.Active) damagePerSecond += _heartWounds.Effective;
 
-            if (_faceWounds > 0)
+            if (_faceWounds.Active)
             {
                 float faceDps = GetAdditionalFaceBleedDps() * treatableMultiplier;
                 if (faceDps > 0f)
@@ -398,9 +411,9 @@ namespace TraumaCore
                 if (!IsHealthAlive()) return;
             }
 
-            foreach (KeyValuePair<EBodyPart, BodyWoundTrack> pair in _bodyWounds)
+            foreach (KeyValuePair<EBodyPart, WoundTrack> pair in _bodyWounds)
             {
-                BodyWoundTrack track = pair.Value;
+                WoundTrack track = pair.Value;
                 if (track.Count <= 0) continue;
                 float decay = GetDecayStrength(track.LastWoundTime);
                 float bodyDps = track.Effective * decay * treatableMultiplier;
@@ -412,11 +425,11 @@ namespace TraumaCore
             float damage = damagePerSecond * deltaTime;
             if (damage > 0f)
             {
-                _heartDamageContext = _heartWound;
+                _heartDamageContext = _heartWounds.Active;
                 try
                 {
                     ApplyPrimaryAndShared(EBodyPart.Chest, damage,
-                        _heartWound ? DamageHelper.HeavyBleedingDamage : DamageHelper.LightBleedingDamage);
+                        _heartWounds.Active ? DamageHelper.HeavyBleedingDamage : DamageHelper.LightBleedingDamage);
                 }
                 finally
                 {
@@ -792,15 +805,15 @@ namespace TraumaCore
             _addingMarker = true;
             try
             {
-                if (_heartWound && _health.FindExistingEffect<IHeavyBleeding>(EBodyPart.Chest) == null)
+                if (_heartWounds.Active && _health.FindExistingEffect<IHeavyBleeding>(EBodyPart.Chest) == null)
                     _health.DoBleed<ActiveHealthController.HeavyBleeding>(EBodyPart.Chest);
-                else if (_chestStacks > 0 &&
+                else if (_chestWounds.Active &&
                     _health.FindExistingEffect<ILightBleeding>(EBodyPart.Chest) == null)
                     _health.DoBleed<ActiveHealthController.LightBleeding>(EBodyPart.Chest);
-                if (_faceWounds > 0 &&
+                if (_faceWounds.Active &&
                     _health.FindExistingEffect<IHeavyBleeding>(EBodyPart.Head) == null)
                     _health.DoBleed<ActiveHealthController.HeavyBleeding>(EBodyPart.Head);
-                foreach (KeyValuePair<EBodyPart, BodyWoundTrack> pair in _bodyWounds)
+                foreach (KeyValuePair<EBodyPart, WoundTrack> pair in _bodyWounds)
                     if (pair.Value.Count > 0 &&
                         _health.FindExistingEffect<ILightBleeding>(pair.Key) == null)
                         _health.DoBleed<ActiveHealthController.LightBleeding>(pair.Key);
@@ -822,7 +835,7 @@ namespace TraumaCore
             ActiveHealthController.HeavyBleeding faceBleed =
                 _health.FindExistingEffect<ActiveHealthController.HeavyBleeding>(EBodyPart.Head);
             if (faceBleed != null) faceBleed.float_15 = 0f;
-            foreach (KeyValuePair<EBodyPart, BodyWoundTrack> pair in _bodyWounds)
+            foreach (KeyValuePair<EBodyPart, WoundTrack> pair in _bodyWounds)
             {
                 ActiveHealthController.LightBleeding bleed =
                     _health.FindExistingEffect<ActiveHealthController.LightBleeding>(pair.Key);
@@ -833,8 +846,8 @@ namespace TraumaCore
 
         private float GetAdditionalFaceBleedDps()
         {
-            if (_health == null || _faceWounds <= 0) return 0f;
-            return _effectiveFaceWounds * FaceDecayStrength;
+            if (_health == null || !_faceWounds.Active) return 0f;
+            return _faceWounds.Effective * FaceDecayStrength;
         }
 
         private void OnEffectRemoved(IHealthEffect effect)
@@ -857,25 +870,17 @@ namespace TraumaCore
 
             EBodyPart bodyPart = removedEffect.BodyPart;
 
-            if (bodyPart == EBodyPart.Chest && removedEffect is IHeavyBleeding && _heartWound)
+            if (bodyPart == EBodyPart.Chest && removedEffect is IHeavyBleeding && _heartWounds.Active)
                 return;
 
             bool hadWound;
             switch (bodyPart)
             {
                 case EBodyPart.Chest:
-                    hadWound = _chestStacks > 0;
-                    _chestStacks = 0;
-                    _effectiveChestStacks = 0f;
-                    _lastChestWoundTime = float.MinValue;
-                    _lastChestInterval = 0f;
-                    _lastChestSeverity = 0f;
+                    hadWound = _chestWounds.Clear();
                     break;
                 case EBodyPart.Head:
-                    hadWound = _faceWounds > 0;
-                    _faceWounds = 0;
-                    _effectiveFaceWounds = 0f;
-                    _lastFaceWoundTime = float.MinValue;
+                    hadWound = _faceWounds.Clear();
                     break;
                 default:
                     hadWound = _bodyWounds.Remove(bodyPart);
@@ -899,21 +904,15 @@ namespace TraumaCore
             _addingMarker = true;
             try
             {
-                _chestStacks = 0;
-                _effectiveChestStacks = 0f;
-                _lastChestWoundTime = float.MinValue;
-                _lastChestInterval = 0f;
-                _lastChestSeverity = 0f;
-                _faceWounds = 0;
-                _effectiveFaceWounds = 0f;
-                _lastFaceWoundTime = float.MinValue;
+                _chestWounds.Clear();
+                _faceWounds.Clear();
                 _bodyWounds.Clear();
                 for (int i = _bloodSources.Count - 1; i >= 0; i--)
                     if (!_bloodSources[i].Heart) _bloodSources.RemoveAt(i);
                 _bloodVisualHitCounts.Clear();
-                if (_heartWound)
+                if (_heartWounds.Active)
                     _bloodVisualHitCounts[((int)EBodyPart.Chest << 1) | 1] =
-                        Mathf.Max(1, _heartWounds);
+                        Mathf.Max(1, _heartWounds.Count);
 
                 List<IHealthEffect> effects = new List<IHealthEffect>(_health.GetAllActiveEffects());
                 for (int i = 0; i < effects.Count; i++)
@@ -923,9 +922,9 @@ namespace TraumaCore
             }
             finally { _addingMarker = false; }
 
-            if (_heartWound) EnsureMarkers();
+            if (_heartWounds.Active) EnsureMarkers();
             if (OrganSystem.DebugLogging.Value)
-                Plugin.Log.LogInfo(_heartWound
+                Plugin.Log.LogInfo(_heartWounds.Active
                     ? "[Trauma] All treatable linked bleeds healed; permanent heart hemorrhage continues"
                     : "[Trauma] All linked bleed wounds healed");
         }

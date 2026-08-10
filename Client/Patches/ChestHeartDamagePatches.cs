@@ -209,18 +209,7 @@ namespace TraumaCore.Patches
                     state.BodyPart);
                 return;
             }
-            switch (state.BodyPart)
-            {
-                case EBodyPart.Head:
-                    trauma.AddFaceWound(state.EffectiveDamage);
-                    break;
-                case EBodyPart.Chest:
-                    trauma.AddChestWound(state.EffectiveDamage);
-                    break;
-                default:
-                    trauma.AddBodyWound(state.BodyPart, state.EffectiveDamage);
-                    break;
-            }
+            trauma.AddTreatableWound(state.BodyPart, state.EffectiveDamage);
         }
 
         private static void LogHit(HitState state, TraumaController trauma)
