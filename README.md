@@ -71,34 +71,7 @@ Press F12 to open the BepInEx Configuration Manager and select **TraumaCore**.
 
 The menu includes separate controls for player and AI hitboxes, bleeding, damage linkage, armor behavior, blood effects, logging, and effect-testing buttons.
 
-The configuration file is:
-
-`BepInEx/config/com.hysocs.traumacore.cfg`
-
-Existing configuration files keep their saved values after an update. Use the reset button beside a setting or remove the old configuration file to apply new defaults.
-
-## Installation
-
-Extract the release archive into the SPT installation directory. The package installs:
-
-`BepInEx/plugins/Hysocs-TraumaCore/TraumaCore.dll`
-
-TraumaCore has no server component.
 
 ## Compatibility
 
 TraumaCore changes EFT's health, armor, fracture, and movement behavior. Other damage or armor overhauls may conflict if they modify the same systems.
-
-## Building
-
-Building requires the .NET SDK and SPT 4.1.2 at `C:\SPT\4.1.2`, unless `SptRoot` is supplied as an MSBuild property.
-
-```powershell
-dotnet build TraumaCore.sln -c Release -p:SkipDeploy=true
-```
-
-The client-only release archive is created under `dist/`.
-
-## License
-
-MIT
