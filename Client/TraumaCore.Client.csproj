@@ -1,0 +1,64 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>TraumaCore</RootNamespace>
+    <AssemblyName>TraumaCore</AssemblyName>
+    <Authors>Hysocs</Authors>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0</AssemblyVersion>
+    <FileVersion>1.0.0</FileVersion>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <SptRoot Condition="'$(SptRoot)' == ''">C:\SPT\4.1.2</SptRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="0Harmony"><HintPath>$(SptRoot)\BepInEx\core\0Harmony.dll</HintPath></Reference>
+    <Reference Include="Assembly-CSharp"><HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\Assembly-CSharp.dll</HintPath></Reference>
+    <Reference Include="BepInEx"><HintPath>$(SptRoot)\BepInEx\core\BepInEx.dll</HintPath></Reference>
+    <Reference Include="Comfort"><HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\Comfort.dll</HintPath></Reference>
+    <Reference Include="Newtonsoft.Json"><HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\Newtonsoft.Json.dll</HintPath></Reference>
+    <Reference Include="spt-common"><HintPath>$(SptRoot)\BepInEx\plugins\spt\spt-common.dll</HintPath></Reference>
+    <Reference Include="Sirenix.Serialization"><HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\Sirenix.Serialization.dll</HintPath></Reference>
+    <Reference Include="UnityEngine"><HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\UnityEngine.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.AnimationModule"><HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\UnityEngine.AnimationModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\UnityEngine.CoreModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.InputLegacyModule"><HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\UnityEngine.IMGUIModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.ImageConversionModule"><HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\UnityEngine.ImageConversionModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\UnityEngine.PhysicsModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.ParticleSystemModule"><HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\UnityEngine.ParticleSystemModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.TextRenderingModule"><HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\UnityEngine.TextRenderingModule.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.UI"><HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\UnityEngine.UI.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.UIModule"><HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\UnityEngine.UIModule.dll</HintPath></Reference>
+    <Reference Include="Unity.TextMeshPro"><HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\Unity.TextMeshPro.dll</HintPath></Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\Icons\effect_bruised.png" LogicalName="TraumaCore.Icons.effect_bruised.png" />
+    <EmbeddedResource Include="..\Icons\effect_heart_wound.png" LogicalName="TraumaCore.Icons.effect_heart_wound.png" />
+    <EmbeddedResource Include="..\Icons\effect_spinal_fracture.png" LogicalName="TraumaCore.Icons.effect_spinal_fracture.png" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <InstallDir>$(SptRoot)\BepInEx\plugins\Hysocs-TraumaCore</InstallDir>
+    <PackageRoot>$(MSBuildProjectDirectory)\..\dist\TraumaCore-$(Version)</PackageRoot>
+    <PackageZip>$(MSBuildProjectDirectory)\..\dist\TraumaCore-$(Version).zip</PackageZip>
+  </PropertyGroup>
+
+  <Target Name="DeployClient" AfterTargets="Build" Condition="'$(SkipDeploy)' != 'true'">
+    <MakeDir Directories="$(InstallDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(InstallDir)" SkipUnchangedFiles="false" />
+  </Target>
+
+  <Target Name="CreateReleasePackage" AfterTargets="CopyFilesToOutputDirectory" Condition="'$(Configuration)' == 'Release' and '$(SkipPackage)' != 'true'">
+    <RemoveDir Directories="$(PackageRoot)" />
+    <Delete Files="$(PackageZip)" />
+    <MakeDir Directories="$(PackageRoot)\BepInEx\plugins\Hysocs-TraumaCore" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PackageRoot)\BepInEx\plugins\Hysocs-TraumaCore" />
+    <ZipDirectory SourceDirectory="$(PackageRoot)" DestinationFile="$(PackageZip)" Overwrite="true" />
+    <Message Importance="high" Text="TraumaCore release package created: $(PackageZip)" />
+  </Target>
+
+</Project>

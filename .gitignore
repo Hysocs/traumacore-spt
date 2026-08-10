@@ -1,0 +1,30 @@
+# Build outputs
+bin/
+obj/
+*.dll
+*.pdb
+*.deps.json
+
+# IDE
+.vs/
+*.user
+*.suo
+*.sln.docstates
+
+# Packages
+packages/
+*.nupkg
+
+# Release packages
+dist/
+
+# Rider
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# SPT specific
+*.cfg
+!*.cfg.example
