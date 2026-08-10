@@ -30,7 +30,6 @@ namespace TraumaCore.Patches
                 health.FindExistingEffect<ISpinalFracture>(EBodyPart.Stomach) != null;
             if (!spinalFracture) return;
 
-            // Match EFT's two-broken-legs behavior, including its painkiller bypass.
             if (health.FindExistingEffect<IPainKiller>() != null) return;
             __instance.MovementContext.EnableSprint(false);
             __instance.AddStateSpeedLimit(0.2f, Player.ESpeedLimit.HealthCondition);

@@ -11,11 +11,6 @@ using UnityEngine;
 
 namespace TraumaCore.Patches
 {
-    /// <summary>
-    /// Replaces EFT's coupled resistance/damage-reduction armor calculation with
-    /// a binary penetration roll and a small, independently balanced durability
-    /// formula. EFT still selects coverage, plate, material and armor component.
-    /// </summary>
     [HarmonyPatch(typeof(ArmorComponent), nameof(ArmorComponent.ApplyDamage))]
     internal static class CustomArmorPenetrationPatch
     {

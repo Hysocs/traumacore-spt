@@ -19,9 +19,6 @@ namespace TraumaCore
         }
     }
 
-    // The health/item UI builds its active-effect rows directly from this
-    // constructor instead of StimulatorHelper.BuffName. Replace the native
-    // combined light/heavy-bleed label at the source actually shown to players.
     [HarmonyPatch(typeof(BuffDescription), MethodType.Constructor,
         new[] { typeof(IStimulatorBuff) })]
     internal static class BloodLossStimBuffRowPatch
@@ -36,8 +33,6 @@ namespace TraumaCore
         }
     }
 
-    // Examining an injector uses Item.Attributes, a third presentation path.
-    // Remove the template's generic treatment rows and rename its blocker row.
     [HarmonyPatch(typeof(HealthEffectsComponent), MethodType.Constructor,
         new[] { typeof(Item), typeof(IHealthEffectsComponentTemplate) })]
     internal static class BloodLossStimExamPanelPatch

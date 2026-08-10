@@ -3,11 +3,6 @@ using HarmonyLib;
 
 namespace TraumaCore.Patches
 {
-    /// <summary>
-    /// Bleeding normally selects EFT's quieter OnAgony phrase. TraumaCore's
-    /// delayed non-head deaths use the unmistakable death phrase instead, while
-    /// suppressing the native selection so only one vocalization is played.
-    /// </summary>
     [HarmonyPatch(typeof(Player), nameof(Player.OnDead))]
     internal static class TraumaDeathVoicePatch
     {

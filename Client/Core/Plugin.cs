@@ -167,8 +167,6 @@ namespace TraumaCore
 
         private void OnWorldDisposed() { DetachWorld(); }
 
-        // Kept identical to FieldKit's main-camera selection. It deliberately runs
-        // only after a GameWorld exists, so menu cameras are never retained.
         private void RefreshCamera()
         {
             if (_camera != null && _camera.enabled &&
@@ -320,8 +318,6 @@ namespace TraumaCore
             float sumX = 0f;
             int projectedCount = 0;
 
-            // Three great-circle rings make the oval's width, height and depth
-            // visible from any viewing angle.
             for (int ring = 0; ring < 3; ring++)
             {
                 Vector2 first = default(Vector2), previous = default(Vector2);
@@ -362,15 +358,12 @@ namespace TraumaCore
                     impact.ThoracicSpine ? thoracic :
                     impact.Brain ? Color.magenta :
                     impact.Heart ? Color.green : new Color(1f, 0.35f, 0.08f, 1f);
-                // Incoming segment (behind the surface) and continuation through torso.
                 AddWorldLine(impact.HitPoint - impact.Direction * 0.45f,
                     impact.HitPoint + impact.Direction * 0.55f, color, 2.5f);
                 AddWorldMarker(impact.HitPoint, Color.white, 0.018f);
                 if (!impact.ArmorStopped && (impact.Heart || impact.Brain ||
                     impact.CervicalSpine || impact.ThoracicSpine))
                 {
-                    // Thick surface-to-structure line proves the ray entered
-                    // the colored hitbox rather than merely passing beside it.
                     AddWorldLine(impact.HitPoint, impact.Intersection, color, 6f);
                     AddWorldSphere(impact.Intersection, 0.014f, color);
                     AddWorldMarker(impact.Intersection, Color.white, 0.032f);
@@ -460,9 +453,6 @@ namespace TraumaCore
             _lines.Add(new LineCommand(localStart, localEnd,
                 new Color(0.55f, 0.005f, 0.01f, 0.92f),
                 Mathf.Max(1f, thickness * 0.32f)));
-            // Only submit a quad once the opaque EFT projector mask has been
-            // converted into a transparent sprite. Until then the core line is
-            // a deliberately visible, non-rectangular fallback.
             if (_nativeBloodTexture != null)
                 _bloodQuads.Add(new BloodQuadCommand(localStart - normal,
                     localStart + normal, localEnd + normal, localEnd - normal,
@@ -721,9 +711,6 @@ namespace TraumaCore
                         Mathf.Max(p.r, Mathf.Max(p.g, p.b)) * intensityScale;
                     mask = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.06f, 0.72f, mask));
                     byte alpha = (byte)Mathf.RoundToInt(mask * 235f);
-                    // Keep the extracted decal as a neutral opacity mask. The
-                    // lit material supplies blood albedo so color is not
-                    // multiplied or interpreted as emissive by particle shaders.
                     pixels[index] = new Color32(255, 255, 255, alpha);
                     if (alpha > 10)
                     {

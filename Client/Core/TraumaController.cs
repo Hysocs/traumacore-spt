@@ -441,15 +441,11 @@ namespace TraumaCore
             float visualStrength = strength * Mathf.Pow(0.75f, priorHits);
             float now = Time.unscaledTime;
 
-            // Repeated fire prolongs the region's existing streams instead of
-            // creating proportionally more volume.
             for (int i = 0; i < _bloodSources.Count; i++)
                 if (_bloodSources[i].BodyPart == bodyPart &&
                     _bloodSources[i].Heart == heart)
                     _bloodSources[i].Created = now;
 
-            // Pellet clusters and tight groups become one stronger wound emitter
-            // rather than several streams occupying virtually the same point.
             for (int i = 0; i < _bloodSources.Count; i++)
             {
                 DebugBloodSource existing = _bloodSources[i];
@@ -477,7 +473,6 @@ namespace TraumaCore
             {
                 Attachment = attachment,
                 LocalPosition = attachment.InverseTransformPoint(_lastImpactPoint),
-                // Blood exits against the incoming projectile direction.
                 LocalDirection = (Quaternion.Inverse(attachment.rotation) * -_lastImpactDirection).normalized,
                 Strength = visualStrength,
                 Created = now,
@@ -525,7 +520,6 @@ namespace TraumaCore
             if (_wasAlive && !alive && !_corpseBloodInitialized)
             {
                 EnsureCorpseBloodReserve();
-                // Start a fresh finite fade for wounds that existed at death.
                 for (int i = 0; i < _bloodSources.Count; i++)
                     _bloodSources[i].Created = now;
             }
@@ -631,8 +625,6 @@ namespace TraumaCore
                 Velocity = velocity,
                 Expires = Time.unscaledTime + Random.Range(0.8f, 1.45f),
                 Size = Random.Range(0.007f, 0.014f),
-                // Preserve visible gaps between particles, but stretch each
-                // droplet along its flight direction into a broken fluid chain.
                 TrailLength = Mathf.Clamp(velocity.magnitude *
                     Random.Range(0.045f, 0.085f), 0.012f, 0.065f)
             });
@@ -660,7 +652,6 @@ namespace TraumaCore
             float ratio = health.Maximum > 0f
                 ? Mathf.Clamp01(health.Current / health.Maximum)
                 : 0f;
-            // Full-health part redirects 25%; a blacked part redirects 100%.
             return Mathf.Lerp(1f, 0.25f, ratio);
         }
 
@@ -714,9 +705,6 @@ namespace TraumaCore
             if (IsHealthAlive() && target != EBodyPart.Common &&
                 !_health.IsBodyPartDestroyed(target))
             {
-                // Each blacked link removes 25 percentage points: one crossed
-                // part passes 75%, two pass 50%. The floor prevents a future
-                // longer linkage from turning damage negative or amplifying it.
                 float retained = crossedBlackedParts <= 0 ? 1f : crossedBlackedParts == 1
                     ? OrganSystem.OneBlackedRetention.Value : crossedBlackedParts == 2
                         ? OrganSystem.TwoBlackedRetention.Value

@@ -19,8 +19,6 @@ namespace TraumaCore
                     {
                         new SimpleBuffDescription("SPINAL FRACTURE")
                     });
-                // The native base class identifies as IFracture. Give this
-                // variation a distinct lookup key without changing mechanics.
                 description.Type = typeof(ISpinalFracture);
                 return new[] { description };
             }

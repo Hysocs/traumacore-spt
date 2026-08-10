@@ -18,8 +18,6 @@ namespace TraumaCore.Patches
             if (bodyPart != EBodyPart.Head && bodyPart != EBodyPart.Chest)
                 return true;
 
-            // EFT normally exempts bleeding from killing when a vital part is
-            // destroyed. This overhaul intentionally makes zero head/chest lethal.
             __instance.Kill(damageType);
             return false;
         }

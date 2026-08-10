@@ -93,8 +93,6 @@ namespace TraumaCore.Patches
                 __state.Bone = OrganSystem.IntersectsLimbBone(__instance, bodyPartType,
                     damageInfo.HitPoint, damageInfo.Direction, out __state.BoneIntersection);
 
-                // Immediate head/chest damage is intentionally negligible and
-                // cannot destroy the part. Trauma damage remains uncapped.
                 __state.Multiplier = OrganSystem.DirectDamagePercent.Value * __state.TargetMultiplier;
                 float currentPart = __instance.ActiveHealthController != null
                     ? __instance.ActiveHealthController.GetBodyPartHealth(bodyPartType).Current

@@ -74,9 +74,6 @@ namespace TraumaCore
             Transform pelvis = OrganSystem.GetPelvisAnchor(player);
             if (ribcage == null) return Vector3.zero;
 
-            // EFT's ribcage origin sits near the base of the neck. Place the
-            // anatomical chest center down the torso between pelvis and ribcage,
-            // then apply organ-local left/forward offsets in ribcage orientation.
             Vector3 chestCenter = pelvis != null
                 ? Vector3.Lerp(pelvis.position, ribcage.position, 0.72f)
                 : ribcage.position - ribcage.up * 0.18f;
@@ -134,7 +131,7 @@ namespace TraumaCore
                 return true;
             }
             float enter = 0f;
-            float exit = 0.55f; // Only consider travel through the target's torso.
+            float exit = 0.55f;
             for (int axis = 0; axis < 3; axis++)
             {
                 float origin = localOrigin[axis];
@@ -185,8 +182,6 @@ namespace TraumaCore
 
         internal const float ArmBoneRadius = 0.0103125f;
         internal const float LegBoneRadius = 0.01875f;
-        // Deliberately a little wider than a real spinal cord so a centered
-        // face/neck shot remains readable and fair in play.
         internal const float UpperSpineRadius = 0.021875f;
         internal const float ThoracicSpineRadius = 0.025f;
 
@@ -198,8 +193,6 @@ namespace TraumaCore
             Transform ribcage = GetChestAnchor(player);
             if (head == null || ribcage == null || Brain == null) return false;
 
-            // The brain ellipsoid's local Y axis follows the head anchor. Its
-            // bottom-center connects to EFT's ribcage origin at the upper chest.
             brainBase = Brain.WorldCenter(player) -
                 (Brain.WorldRotation(player) * Vector3.up) * Brain.HalfExtents.y +
                 head.TransformVector(CervicalBrainEndOffset);
@@ -230,8 +223,6 @@ namespace TraumaCore
 
             chestTop = ribcage.position +
                 ribcage.TransformVector(SpineChestEndOffset);
-            // Continue through the full torso instead of ending midway through
-            // the stomach, giving the lower back and abdomen a spinal structure.
             stomachTop = pelvis.position +
                 pelvis.TransformVector(SpinePelvisEndOffset);
             return (chestTop - stomachTop).sqrMagnitude > 0.0001f;
