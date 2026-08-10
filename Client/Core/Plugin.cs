@@ -17,7 +17,7 @@ namespace TraumaCore
     [BepInPlugin(Guid, Name, Version)]
     public sealed partial class Plugin : BaseUnityPlugin
     {
-        public const string Guid = "com.traumacore.client";
+        public const string Guid = "com.hysocs.traumacore";
         public const string Name = "TraumaCore";
         public const string Version = "1.1.0";
 

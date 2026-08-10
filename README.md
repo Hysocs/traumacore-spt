@@ -1,86 +1,81 @@
 # TraumaCore
 
-TraumaCore is a client-side damage and armor overhaul for SPT. It adds anatomical hitboxes, damage-driven bleeding, connected body-part damage, localized armor wear, and a small set of related injury effects.
+TraumaCore is a damage and armor overhaul for SPT that makes shot placement, bleeding, bones, and repeated armor hits more important.
 
-EFT normally resolves most character damage through broad body-part health pools. TraumaCore keeps those body parts and EFT's equipment coverage, but adds smaller shapes attached to the animated skeleton. Shots are tested along their path through the body, so an organ or bone is only affected when the projectile line intersects its custom geometry.
+Instead of treating every hit to a body part the same way, TraumaCore checks where the bullet travels inside the body. A shot can strike the brain, heart, spine, or a major limb bone. Hits that miss those areas still cause normal wounds and bleeding based on the body part that was struck.
 
-The default balance is intended for PvE. Brain and cervical-spine hits are immediately fatal, heart wounds cause rapid permanent bleeding, and ordinary chest or limb wounds kill through accumulated blood loss rather than a large amount of immediate bullet damage. Arms have low damage linkage, while legs and the stomach transfer more damage toward connected parts.
+The default settings are designed around PvE. Accurate shots to vital areas end fights quickly, chest wounds become dangerous when they stack, and shooting arms or legs is less effective than shooting center mass. Players use more forgiving organ settings than AI and scavs by default.
 
-## Hitboxes
+## Features
 
-TraumaCore adds the following geometry:
+### Anatomical Hitboxes
 
-- Two overlapping ellipsoids form the brain and lower brain lobes.
-- A capsule connects the lower brain area to the upper chest as the cervical spine.
-- A second capsule continues from the chest through the stomach to the pelvis.
-- A box inside the chest represents the heart.
-- Capsules follow the major arm and leg bones, including bridging segments between separated EFT rig bones.
+- Brain and lower-brain hitboxes that move with the head
+- A fatal cervical-spine hitbox through the neck
+- A lower spine running from the chest to the pelvis
+- A heart hitbox inside the chest
+- Major bones in the arms and legs
 
-The shapes follow EFT's animated head, ribcage, pelvis, and limb transforms. They do not replace the game's visible body-part colliders; those colliders still determine whether a shot hit the head, chest, stomach, arm, or leg before TraumaCore performs its internal intersection tests.
+Brain and cervical-spine hits are fatal. Heart hits cause extremely fast bleeding. Lower-spine hits cause a spinal fracture, while hits to limb bones can fracture the affected arm or leg.
 
-Brain and cervical-spine intersections are fatal. A thoracic or lower-spine intersection applies a native-compatible spinal fracture to the chest or stomach. Limb-bone intersections apply EFT fractures to the struck limb.
+The hitboxes follow the character's movement and animations. They do not make the entire head or chest count as an organ hit—the bullet must pass through the smaller internal area.
 
-## Damage and Bleeding
+### Wounds and Bleeding
 
-By default, 15% of a bullet's adjusted damage is applied immediately. The remaining threat comes from wounds created according to the hit location and original bullet damage.
+Most bullet damage is converted into wounds instead of being applied immediately.
 
-- Heart wounds create fast, permanent bleeding and a dedicated Heart Wound status effect.
-- Chest wounds stack and become more severe with repeated hits.
-- Face, stomach, arm, and leg wounds produce location-scaled bleeding.
-- Non-heart wounds decay toward 10% strength over five seconds.
-- Blood-loss blockers reduce treatable bleeding without removing permanent heart bleeding.
-- Bleeding damage can pass through linked body parts, with reduced retention after crossing blacked parts.
+- Chest wounds stack with repeated hits.
+- Heart wounds cause fast bleeding that cannot be treated normally.
+- Face, stomach, arm, and leg wounds bleed at different rates.
+- Ordinary bleeding becomes weaker after the last hit.
+- Blacked body parts pass some damage toward connected healthy parts.
+- Arms transfer less damage than legs or the stomach.
 
-Default linkage multipliers are `0.20` for arms, `1.00` for legs, and `0.75` for the stomach. Damage crossing one, two, or three-or-more blacked parts retains `85%`, `60%`, or `30%` respectively.
+This makes center-mass hits reliable without making every chest shot an instant kill. Limb shots can still be lethal, but generally require more hits or time than vital-area damage.
 
-Procedural blood particles emit from the attached wound location and can leave EFT blood impacts on the environment. Corpses can produce a small amount of additional blood when shot, limited by a cached blood reserve and an eight-second fade.
+### Armor
 
-## Armor
+Armor either stops a shot or allows it through based on the ammunition, armor class, material, condition, and covered area.
 
-TraumaCore replaces EFT's coupled armor resistance and damage-reduction result with a binary penetration roll. EFT still selects the covered area, armor component, plate, material, armor class, and current durability. TraumaCore uses those values with the ammunition's penetration power to decide whether the shot penetrates or stops.
+When armor stops a shot, that location becomes weakened. Repeated hits near the same point deal increasing armor damage, up to five times the normal durability loss. This does not guarantee penetration, but it prevents the same small area from behaving like untouched armor after several impacts.
 
-- A penetrating round continues with 65% of its remaining penetration power.
-- A stopped round deals no direct body damage and can apply a temporary Bruised effect.
-- Armor materials retain their individual destructibility values.
-- A stopped hit creates a localized weak spot attached to that armor component.
-- Repeated stopped hits within 4.5 cm of the same point deal increasing durability damage: `2x`, `3x`, `4x`, then a `5x` cap.
-- Weak spots increase durability loss only; they do not directly increase penetration chance.
+Stopped rounds can also cause a temporary Bruised effect that reduces movement speed and stamina recovery.
 
-The Bruised effect reduces movement speed and stamina recovery for up to 15 seconds. Bruised, Heart Wound, and Spinal Fracture use custom status icons.
+### Feedback
+
+- Custom icons for Bruised, Heart Wound, and Spinal Fracture
+- Blood particles emitted from the wound location
+- A small amount of blood when shooting a recently killed body
+- Death and agony sounds for delayed bleed-out deaths
+- Optional hitbox and intersection renderer for testing
+
+The debug renderer is disabled by default.
 
 ## Default Balance
 
-Custom body trauma and armor penetration are enabled for players and AI/scavs by default, but their hitbox balance differs:
+TraumaCore is enabled for players, AI, and scavs by default.
 
-| Setting | Player | AI / Scav |
-| --- | ---: | ---: |
-| Trauma damage multiplier | `0.25` | `1.00` |
-| Brain hitbox | Enabled | Enabled |
-| Heart hitbox | Disabled | Enabled |
-| Cervical spine | Disabled | Enabled |
-| Thoracic/lower spine | Enabled | Enabled |
+AI and scavs use the complete organ system. Players begin with brain and lower-spine hitboxes enabled, while player heart and cervical-spine hitboxes are disabled to reduce sudden deaths from AI fire.
 
-This keeps the full anatomical model on AI while reducing sudden organ lethality against the player. Every target system and hitbox can be enabled or disabled separately through F12.
+Default damage linkage is:
 
-World blood effects are enabled by default. Anatomical debug rendering is disabled by default. Debug logging remains enabled to help diagnose hit classification and armor results.
+- Arms: `0.20`
+- Legs: `1.00`
+- Stomach: `0.75`
 
-## Feedback and Debugging
-
-Non-head TraumaCore deaths use EFT death or agony voice lines with weighted variation so delayed bleed-outs remain audible when a target moves out of view. Fatal head hits have a smaller chance to play a death vocalization.
-
-The optional organ renderer shows the live brain, heart, spine, limb-bone, armor weak-spot, and projectile-intersection geometry. Actual intersections draw a thick line from the surface hit to the internal contact point, along with a colored sphere and marker. This renderer is intended for testing and is not required during normal play.
+These values and the individual player and AI hitboxes can be changed through F12.
 
 ## Usage
 
 Press F12 to open the BepInEx Configuration Manager and select **TraumaCore**.
 
-Settings are grouped by global damage, player hitboxes, scav/AI hitboxes, bleed balance, damage linkage, visuals, logging, and effect-testing controls.
+The menu includes separate controls for player and AI hitboxes, bleeding, damage linkage, armor behavior, blood effects, logging, and effect-testing buttons.
 
-The generated configuration file is:
+The configuration file is:
 
-`BepInEx/config/com.traumacore.client.cfg`
+`BepInEx/config/com.hysocs.traumacore.cfg`
 
-Changing source defaults does not overwrite values already saved in this file. Use the reset button beside an option or remove the old configuration file to adopt new defaults.
+Existing configuration files keep their saved values after an update. Use the reset button beside a setting or remove the old configuration file to apply new defaults.
 
 ## Installation
 
@@ -92,7 +87,7 @@ TraumaCore has no server component.
 
 ## Compatibility
 
-TraumaCore patches EFT's shot, health, fracture, movement, and armor calculations. Other mods that replace the same damage or armor methods may override TraumaCore or produce combined behavior. Compatibility should be confirmed before using another health or armor overhaul alongside it.
+TraumaCore changes EFT's health, armor, fracture, and movement behavior. Other damage or armor overhauls may conflict if they modify the same systems.
 
 ## Building
 
