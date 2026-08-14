@@ -19,7 +19,7 @@ namespace TraumaCore
     {
         public const string Guid = "com.hysocs.traumacore";
         public const string Name = "TraumaCore";
-        public const string Version = "1.1.0";
+        public const string Version = "1.2.0";
 
         internal static ManualLogSource Log { get; private set; }
 
@@ -84,6 +84,21 @@ namespace TraumaCore
             Logger.LogInfo(Name + " " + Version + " loaded");
         }
 
+        private async void Start()
+        {
+            try
+            {
+                await EFTHardSettings.Load();
+                BruisedHealthEffect.EnsureIconRegistered();
+                HeartWoundHealthEffect.EnsureIconRegistered();
+                SpinalFractureHealthEffect.EnsureIconRegistered();
+            }
+            catch (Exception exception)
+            {
+                Logger.LogError(exception);
+            }
+        }
+
         private void Update()
         {
             UpdateBloodParticlesIndependent();
@@ -121,9 +136,6 @@ namespace TraumaCore
 
         private void RefreshWorld()
         {
-            BruisedHealthEffect.EnsureIconRegistered();
-            HeartWoundHealthEffect.EnsureIconRegistered();
-            SpinalFractureHealthEffect.EnsureIconRegistered();
             GameWorld next = Singleton<GameWorld>.Instance;
             if (next != _world)
                 AttachWorld(next);
@@ -703,21 +715,21 @@ namespace TraumaCore
                 float intensityScale = maxIntensity > 0 ? 1f / maxIntensity : 0f;
                 int minX = width, minY = height, maxX = -1, maxY = -1;
                 for (int y = 0; y < height; y++)
-                for (int x = 0; x < width; x++)
-                {
-                    int index = y * width + x;
-                    Color32 p = pixels[index];
-                    float mask = hasUsefulAlpha ? p.a / 255f :
-                        Mathf.Max(p.r, Mathf.Max(p.g, p.b)) * intensityScale;
-                    mask = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.06f, 0.72f, mask));
-                    byte alpha = (byte)Mathf.RoundToInt(mask * 235f);
-                    pixels[index] = new Color32(255, 255, 255, alpha);
-                    if (alpha > 10)
+                    for (int x = 0; x < width; x++)
                     {
-                        if (x < minX) minX = x; if (x > maxX) maxX = x;
-                        if (y < minY) minY = y; if (y > maxY) maxY = y;
+                        int index = y * width + x;
+                        Color32 p = pixels[index];
+                        float mask = hasUsefulAlpha ? p.a / 255f :
+                            Mathf.Max(p.r, Mathf.Max(p.g, p.b)) * intensityScale;
+                        mask = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.06f, 0.72f, mask));
+                        byte alpha = (byte)Mathf.RoundToInt(mask * 235f);
+                        pixels[index] = new Color32(255, 255, 255, alpha);
+                        if (alpha > 10)
+                        {
+                            if (x < minX) minX = x; if (x > maxX) maxX = x;
+                            if (y < minY) minY = y; if (y > maxY) maxY = y;
+                        }
                     }
-                }
                 Destroy(readable);
                 if (maxX < minX || maxY < minY) return null;
 
