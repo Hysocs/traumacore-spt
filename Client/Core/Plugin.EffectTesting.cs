@@ -85,7 +85,7 @@ namespace TraumaCore
             if (!IsLocalPlayerAlive()) return;
             TraumaController trauma = _localPlayer.GetComponent<TraumaController>();
             if (trauma == null) trauma = _localPlayer.gameObject.AddComponent<TraumaController>();
-            trauma.Initialize(_localPlayer);
+            trauma.InitializeForPlayer(_localPlayer);
             action(trauma, _localPlayer);
             Logger.LogInfo("[EffectTest] " + name + " applied to local player");
         }

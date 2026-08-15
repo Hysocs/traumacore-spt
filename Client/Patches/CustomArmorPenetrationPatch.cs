@@ -1,3 +1,4 @@
+using System.Reflection;
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
@@ -7,12 +8,12 @@ using EFT.Ballistics;
 using EFT.HealthSystem;
 using EFT.InventoryLogic;
 using HarmonyLib;
+using SPT.Reflection.Patching;
 using UnityEngine;
 
 namespace TraumaCore.Patches
 {
-    [HarmonyPatch(typeof(ArmorComponent), nameof(ArmorComponent.ApplyDamage))]
-    internal static class CustomArmorPenetrationPatch
+    public sealed class CustomArmorPenetrationPatch : ModulePatch
     {
         private const float DamagedArmorResistanceFloor = 0.65f;
         private const float EqualPenetrationBias = 4f;
@@ -47,7 +48,12 @@ namespace TraumaCore.Patches
             internal float Multiplier;
         }
 
-        private static bool Prefix(ArmorComponent __instance,
+        protected override MethodBase GetTargetMethod() =>
+            AccessTools.Method(typeof(ArmorComponent),
+                nameof(ArmorComponent.ApplyDamage));
+
+        [PatchPrefix]
+        private static bool PatchPrefix(ArmorComponent __instance,
             ref DamageInfo damageInfo, List<ArmorComponent> armorComponents,
             ref float __result)
         {

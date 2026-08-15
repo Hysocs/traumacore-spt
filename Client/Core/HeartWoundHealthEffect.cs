@@ -37,7 +37,7 @@ namespace TraumaCore
                     EFTHardSettings.Instance.StaticIcons == null) return;
                 var sprites = EFTHardSettings.Instance.StaticIcons.EffectIcons;
                 sprites.EffectIcons[typeof(IHeartWound)] =
-                    EffectIconLoader.Load("effect_heart_wound.png") ??
+                    EffectIconLoader.LoadEffectIcon("effect_heart_wound.png") ??
                     sprites.HeavyBleeding;
             }
             catch { }

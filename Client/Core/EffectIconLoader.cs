@@ -11,7 +11,7 @@ namespace TraumaCore
         private static readonly Dictionary<string, Sprite> Cache =
             new Dictionary<string, Sprite>();
 
-        internal static Sprite Load(string fileName)
+        internal static Sprite LoadEffectIcon(string fileName)
         {
             if (Cache.TryGetValue(fileName, out Sprite cached)) return cached;
             Assembly assembly = typeof(EffectIconLoader).Assembly;

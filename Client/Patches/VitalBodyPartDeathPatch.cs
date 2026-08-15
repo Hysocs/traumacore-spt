@@ -1,14 +1,19 @@
+using System.Reflection;
 using EFT;
 using EFT.HealthSystem;
 using HarmonyLib;
+using SPT.Reflection.Patching;
 
 namespace TraumaCore.Patches
 {
-    [HarmonyPatch(typeof(ActiveHealthController),
-        nameof(ActiveHealthController.TryToKillAfterDestroyPart))]
-    internal static class VitalBodyPartDeathPatch
+    public sealed class VitalBodyPartDeathPatch : ModulePatch
     {
-        private static bool Prefix(ActiveHealthController __instance,
+        protected override MethodBase GetTargetMethod() =>
+            AccessTools.Method(typeof(ActiveHealthController),
+                nameof(ActiveHealthController.TryToKillAfterDestroyPart));
+
+        [PatchPrefix]
+        private static bool PatchPrefix(ActiveHealthController __instance,
             EBodyPart bodyPart, EDamageType damageType)
         {
             if (!OrganSystem.Enabled.Value || __instance == null ||

@@ -36,7 +36,8 @@ namespace TraumaCore
                     EFTHardSettings.Instance.StaticIcons == null) return;
                 var sprites = EFTHardSettings.Instance.StaticIcons.EffectIcons;
                 sprites.EffectIcons[typeof(IBruised)] =
-                    EffectIconLoader.Load("effect_bruised.png") ?? sprites.Contusion;
+                    EffectIconLoader.LoadEffectIcon("effect_bruised.png") ??
+                    sprites.Contusion;
             }
             catch { }
         }

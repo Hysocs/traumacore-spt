@@ -1,7 +1,9 @@
 using System;
+using System.Reflection;
 using EFT;
 using EFT.HealthSystem;
 using HarmonyLib;
+using SPT.Reflection.Patching;
 
 namespace TraumaCore.Patches
 {
@@ -11,20 +13,28 @@ namespace TraumaCore.Patches
         [ThreadStatic] internal static bool AllowPresentation;
     }
 
-    [HarmonyPatch(typeof(Player), nameof(Player.OnAudioHealthApplyDamage))]
-    internal static class TraumaVoiceThrottlePatch
+    public sealed class TraumaVoiceThrottlePatch : ModulePatch
     {
-        private static bool Prefix()
+        protected override MethodBase GetTargetMethod() =>
+            AccessTools.Method(typeof(Player),
+                nameof(Player.OnAudioHealthApplyDamage));
+
+        [PatchPrefix]
+        private static bool PatchPrefix()
         {
             return !TraumaPresentationContext.InsideTraumaDamage ||
                    TraumaPresentationContext.AllowPresentation;
         }
     }
 
-    [HarmonyPatch(typeof(EffectsController), nameof(EffectsController.OnHealthApplyDamage))]
-    internal static class TraumaScreenBloodThrottlePatch
+    public sealed class TraumaScreenBloodThrottlePatch : ModulePatch
     {
-        private static bool Prefix()
+        protected override MethodBase GetTargetMethod() =>
+            AccessTools.Method(typeof(EffectsController),
+                nameof(EffectsController.OnHealthApplyDamage));
+
+        [PatchPrefix]
+        private static bool PatchPrefix()
         {
             return !TraumaPresentationContext.InsideTraumaDamage ||
                    TraumaPresentationContext.AllowPresentation;

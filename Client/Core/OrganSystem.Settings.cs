@@ -37,7 +37,7 @@ namespace TraumaCore
         internal static readonly Vector3 SpinePelvisEndOffset =
             new Vector3(-0.02112676f, -0.07981221f, -0.009389671f);
 
-        internal static void Initialize(ConfigFile config)
+        internal static void InitializeOrganSettings(ConfigFile config)
         {
             BindGeneral(config);
             BindTargetRules(config);

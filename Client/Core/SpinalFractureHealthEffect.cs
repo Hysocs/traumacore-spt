@@ -32,7 +32,8 @@ namespace TraumaCore
                     EFTHardSettings.Instance.StaticIcons == null) return;
                 var sprites = EFTHardSettings.Instance.StaticIcons.EffectIcons;
                 sprites.EffectIcons[typeof(ISpinalFracture)] =
-                    EffectIconLoader.Load("effect_spinal_fracture.png") ??
+                    EffectIconLoader.LoadEffectIcon(
+                        "effect_spinal_fracture.png") ??
                     sprites.Fracture;
             }
             catch { }

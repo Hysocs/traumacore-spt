@@ -173,7 +173,7 @@ namespace TraumaCore
             }
         }
 
-        internal void Initialize(Player player)
+        internal void InitializeForPlayer(Player player)
         {
             ActiveHealthController nextHealth = player != null
                 ? player.ActiveHealthController : null;

@@ -1,14 +1,20 @@
+using System.Reflection;
 using EFT;
 using EFT.HealthSystem;
 using HarmonyLib;
+using SPT.Reflection.Patching;
 using UnityEngine;
 
 namespace TraumaCore.Patches
 {
-    [HarmonyPatch(typeof(MovementContext), nameof(MovementContext.ClampSpeed))]
-    internal static class BruiseMovementPatch
+    public sealed class BruiseMovementPatch : ModulePatch
     {
-        private static void Postfix(Player ____player, ref float __result)
+        protected override MethodBase GetTargetMethod() =>
+            AccessTools.Method(typeof(MovementContext),
+                nameof(MovementContext.ClampSpeed));
+
+        [PatchPostfix]
+        private static void PatchPostfix(Player ____player, ref float __result)
         {
             if (____player == null || __result <= 0f) return;
             TraumaController trauma = ____player.GetComponent<TraumaController>();
@@ -17,10 +23,14 @@ namespace TraumaCore.Patches
         }
     }
 
-    [HarmonyPatch(typeof(Player), nameof(Player.UpdateSpeedLimitByHealth))]
-    internal static class SpinalFractureMovementPatch
+    public sealed class SpinalFractureMovementPatch : ModulePatch
     {
-        private static void Postfix(Player __instance)
+        protected override MethodBase GetTargetMethod() =>
+            AccessTools.Method(typeof(Player),
+                nameof(Player.UpdateSpeedLimitByHealth));
+
+        [PatchPostfix]
+        private static void PatchPostfix(Player __instance)
         {
             if (__instance == null || __instance.ActiveHealthController == null)
                 return;

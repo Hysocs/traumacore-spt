@@ -1,14 +1,20 @@
 using System.Collections.Generic;
 using EFT;
+using System.Reflection;
 using EFT.HealthSystem;
 using HarmonyLib;
+using SPT.Reflection.Patching;
 
 namespace TraumaCore.Patches
 {
-    [HarmonyPatch(typeof(HealthHelper), nameof(HealthHelper.GetDisplayVariation))]
-    internal static class SpinalFractureDisplayPatch
+    public sealed class SpinalFractureDisplayPatch : ModulePatch
     {
-        private static void Postfix(IHealthEffect effect,
+        protected override MethodBase GetTargetMethod() =>
+            AccessTools.Method(typeof(HealthHelper),
+                nameof(HealthHelper.GetDisplayVariation));
+
+        [PatchPostfix]
+        private static void PatchPostfix(IHealthEffect effect,
             ref EffectDescription[] __result)
         {
             if (!(effect is IFracture) ||

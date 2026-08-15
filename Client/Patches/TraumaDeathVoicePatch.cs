@@ -1,17 +1,22 @@
+using System.Reflection;
 using EFT;
 using HarmonyLib;
+using SPT.Reflection.Patching;
 
 namespace TraumaCore.Patches
 {
-    [HarmonyPatch(typeof(Player), nameof(Player.OnDead))]
-    internal static class TraumaDeathVoicePatch
+    public sealed class TraumaDeathVoicePatch : ModulePatch
     {
         private const float PreferredPhraseChance = 0.75f;
         private const float HeadDeathPhraseChance = 0.35f;
         [System.ThreadStatic] private static bool _replaceNativeVoice;
         [System.ThreadStatic] private static EPhraseTrigger _replacementPhrase;
 
-        private static void Prefix(Player __instance)
+        protected override MethodBase GetTargetMethod() =>
+            AccessTools.Method(typeof(Player), nameof(Player.OnDead));
+
+        [PatchPrefix]
+        private static void PatchPrefix(Player __instance)
         {
             TraumaController trauma = __instance != null
                 ? __instance.GetComponent<TraumaController>() : null;
@@ -37,7 +42,8 @@ namespace TraumaCore.Patches
                 ? preferred : alternate;
         }
 
-        private static void Postfix(Player __instance)
+        [PatchPostfix]
+        private static void PatchPostfix(Player __instance)
         {
             if (!_replaceNativeVoice || __instance == null || __instance.Speaker == null)
                 return;
@@ -53,7 +59,8 @@ namespace TraumaCore.Patches
             }
         }
 
-        private static void Finalizer()
+        [PatchFinalizer]
+        private static void PatchFinalizer()
         {
             _replaceNativeVoice = false;
             _replacementPhrase = EPhraseTrigger.None;
@@ -63,10 +70,14 @@ namespace TraumaCore.Patches
         { get { return _replaceNativeVoice; } }
     }
 
-    [HarmonyPatch(typeof(Player), nameof(Player.ShouldVocalizeDeath))]
-    internal static class SuppressReplacedDeathVoicePatch
+    public sealed class SuppressReplacedDeathVoicePatch : ModulePatch
     {
-        private static void Postfix(ref bool __result)
+        protected override MethodBase GetTargetMethod() =>
+            AccessTools.Method(typeof(Player),
+                nameof(Player.ShouldVocalizeDeath));
+
+        [PatchPostfix]
+        private static void PatchPostfix(ref bool __result)
         {
             if (TraumaDeathVoicePatch.ReplacingNativeVoice)
                 __result = false;

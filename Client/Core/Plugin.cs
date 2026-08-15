@@ -7,7 +7,7 @@ using Comfort.Common;
 using TraumaCore.Patches;
 using EFT;
 using EFT.HealthSystem;
-using HarmonyLib;
+using SPT.Reflection.Patching;
 using Systems.Effects;
 using UnityEngine;
 using UnityEngine.UI;
@@ -41,7 +41,7 @@ namespace TraumaCore
         private static readonly float[] CircleCos = BuildCircleTable(true);
         private static readonly float[] CircleSin = BuildCircleTable(false);
         private Font _debugFont;
-        private Harmony _harmony;
+        private PatchManager _patchManager;
         private GameWorld _world;
         private Player _localPlayer;
         private Camera _camera;
@@ -76,10 +76,10 @@ namespace TraumaCore
         private void Awake()
         {
             Log = Logger;
-            OrganSystem.Initialize(Config);
+            OrganSystem.InitializeOrganSettings(Config);
             BindEffectTestButtons();
-            _harmony = new Harmony(Guid);
-            _harmony.PatchAll(typeof(BodyTraumaPatch).Assembly);
+            _patchManager = new PatchManager(this, autoPatch: true);
+            _patchManager.EnablePatches();
             Canvas.preWillRenderCanvases += RenderFrame;
             Logger.LogInfo(Name + " " + Version + " loaded");
         }
@@ -1124,7 +1124,7 @@ namespace TraumaCore
             _shuttingDown = true;
             Canvas.preWillRenderCanvases -= RenderFrame;
             DetachWorld();
-            if (_harmony != null) _harmony.UnpatchSelf();
+            if (_patchManager != null) _patchManager.DisablePatches();
             if (_canvas != null) Destroy(_canvas.gameObject);
             if (_bloodWorldObject != null) Destroy(_bloodWorldObject);
             if (_bloodWorldMaterial != null) Destroy(_bloodWorldMaterial);

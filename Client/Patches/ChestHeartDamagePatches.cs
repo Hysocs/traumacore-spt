@@ -1,14 +1,15 @@
 using System;
+using System.Reflection;
 using EFT;
 using EFT.Ballistics;
 using EFT.HealthSystem;
 using HarmonyLib;
+using SPT.Reflection.Patching;
 using UnityEngine;
 
 namespace TraumaCore.Patches
 {
-    [HarmonyPatch(typeof(Player), nameof(Player.ApplyShot))]
-    internal static class BodyTraumaPatch
+    public sealed class BodyTraumaPatch : ModulePatch
     {
         internal struct HitState
         {
@@ -19,7 +20,12 @@ namespace TraumaCore.Patches
             public Transform HitTransform;
         }
 
-        private static void Prefix(Player __instance, ref DamageInfo damageInfo,
+        protected override MethodBase GetTargetMethod() =>
+            AccessTools.Method(typeof(Player), nameof(Player.ApplyShot));
+
+        [PatchPrefix]
+        private static void PatchPrefix(Player __instance,
+            ref DamageInfo damageInfo,
             EBodyPart bodyPartType, ref HitState __state)
         {
             DeterministicFracturePatch.InsideShot = false;
@@ -111,7 +117,9 @@ namespace TraumaCore.Patches
             return null;
         }
 
-        private static void Postfix(Player __instance, ref DamageInfo damageInfo,
+        [PatchPostfix]
+        private static void PatchPostfix(Player __instance,
+            ref DamageInfo damageInfo,
             HitState __state)
         {
             DeterministicFracturePatch.InsideShot = false;
@@ -173,7 +181,7 @@ namespace TraumaCore.Patches
         {
             TraumaController trauma = player.GetComponent<TraumaController>();
             if (trauma == null) trauma = player.gameObject.AddComponent<TraumaController>();
-            trauma.Initialize(player);
+            trauma.InitializeForPlayer(player);
             return trauma;
         }
 
@@ -256,13 +264,17 @@ namespace TraumaCore.Patches
         }
     }
 
-    [HarmonyPatch(typeof(ActiveHealthController), nameof(ActiveHealthController.DoFracture))]
-    internal static class DeterministicFracturePatch
+    public sealed class DeterministicFracturePatch : ModulePatch
     {
         [ThreadStatic] internal static bool InsideShot;
         [ThreadStatic] internal static bool AllowNextFracture;
 
-        private static bool Prefix()
+        protected override MethodBase GetTargetMethod() =>
+            AccessTools.Method(typeof(ActiveHealthController),
+                nameof(ActiveHealthController.DoFracture));
+
+        [PatchPrefix]
+        private static bool PatchPrefix()
         {
             if (AllowNextFracture) { AllowNextFracture = false; return true; }
             return !InsideShot;

@@ -4,13 +4,11 @@ using EFT;
 using EFT.HealthSystem;
 using EFT.InventoryLogic;
 using HarmonyLib;
+using SPT.Reflection.Patching;
 
 namespace TraumaCore.Patches
 {
-    [HarmonyPatch(typeof(OfflineHealthController), MethodType.Constructor,
-        new[] { typeof(Profile.HealthInfo), typeof(InventoryController),
-            typeof(SkillManager), typeof(bool) })]
-    internal static class LegacyHealthEffectCleanupPatch
+    public sealed class LegacyHealthEffectCleanupPatch : ModulePatch
     {
         private static readonly string[] LegacyEffectNames =
         {
@@ -19,7 +17,15 @@ namespace TraumaCore.Patches
             "SpinalFractureHealthEffect"
         };
 
-        private static void Prefix(Profile.HealthInfo profileHealth)
+        protected override MethodBase GetTargetMethod() =>
+            AccessTools.Constructor(typeof(OfflineHealthController), new[]
+            {
+                typeof(Profile.HealthInfo), typeof(InventoryController),
+                typeof(SkillManager), typeof(bool)
+            });
+
+        [PatchPrefix]
+        private static void PatchPrefix(Profile.HealthInfo profileHealth)
         {
             RemoveLegacyEffects(profileHealth, true);
         }
@@ -45,19 +51,20 @@ namespace TraumaCore.Patches
         }
     }
 
-    [HarmonyPatch]
-    internal static class PreventTraumaEffectPersistencePatch
+    public sealed class PreventTraumaEffectPersistencePatch : ModulePatch
     {
-        private static IEnumerable<MethodBase> TargetMethods()
+        protected override MethodBase GetTargetMethod()
         {
             foreach (MethodInfo method in AccessTools.GetDeclaredMethods(
                 typeof(ActiveHealthController)))
                 if (method.Name == nameof(ActiveHealthController.Store) &&
                     method.ReturnType == typeof(Profile.HealthInfo))
-                    yield return method;
+                    return method;
+            return null;
         }
 
-        private static void Postfix(ref Profile.HealthInfo __result)
+        [PatchPostfix]
+        private static void PatchPostfix(ref Profile.HealthInfo __result)
         {
             LegacyHealthEffectCleanupPatch.RemoveLegacyEffects(__result, false);
         }

@@ -1,13 +1,19 @@
+using System.Reflection;
 using EFT.HealthSystem;
 using EFT.InventoryLogic;
 using HarmonyLib;
+using SPT.Reflection.Patching;
 
 namespace TraumaCore
 {
-    [HarmonyPatch(typeof(StimulatorHelper), nameof(StimulatorHelper.BuffName))]
-    internal static class BloodLossStimDescriptionPatch
+    public sealed class BloodLossStimDescriptionPatch : ModulePatch
     {
-        private static void Postfix(
+        protected override MethodBase GetTargetMethod() =>
+            AccessTools.Method(typeof(StimulatorHelper),
+                nameof(StimulatorHelper.BuffName));
+
+        [PatchPostfix]
+        private static void PatchPostfix(
             EffectsSettings.StimulatorSettings.StimulatorBuffSettings buffSettings,
             ref string __result)
         {
@@ -19,11 +25,15 @@ namespace TraumaCore
         }
     }
 
-    [HarmonyPatch(typeof(BuffDescription), MethodType.Constructor,
-        new[] { typeof(IStimulatorBuff) })]
-    internal static class BloodLossStimBuffRowPatch
+    public sealed class BloodLossStimBuffRowPatch : ModulePatch
     {
-        private static void Postfix(IStimulatorBuff buff, BuffDescription __instance)
+        protected override MethodBase GetTargetMethod() =>
+            AccessTools.Constructor(typeof(BuffDescription),
+                new[] { typeof(IStimulatorBuff) });
+
+        [PatchPostfix]
+        private static void PatchPostfix(IStimulatorBuff buff,
+            BuffDescription __instance)
         {
             if (buff != null && buff.Settings != null &&
                 buff.Settings.BuffType == EStimulatorBuffType.RemoveAllBloodLosses)
@@ -33,11 +43,16 @@ namespace TraumaCore
         }
     }
 
-    [HarmonyPatch(typeof(HealthEffectsComponent), MethodType.Constructor,
-        new[] { typeof(Item), typeof(IHealthEffectsComponentTemplate) })]
-    internal static class BloodLossStimExamPanelPatch
+    public sealed class BloodLossStimExamPanelPatch : ModulePatch
     {
-        private static void Postfix(Item item)
+        protected override MethodBase GetTargetMethod() =>
+            AccessTools.Constructor(typeof(HealthEffectsComponent), new[]
+            {
+                typeof(Item), typeof(IHealthEffectsComponentTemplate)
+            });
+
+        [PatchPostfix]
+        private static void PatchPostfix(Item item)
         {
             if (item == null) return;
 
