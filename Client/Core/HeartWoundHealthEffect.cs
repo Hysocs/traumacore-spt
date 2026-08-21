@@ -15,19 +15,20 @@ namespace TraumaCore
 
         public override EffectDescription[] DisplayableVariations
         {
-            get
-            {
-                return new[]
-                {
-                    new EffectDescription(this, true,
-                        new List<SimpleBuffDescription>
-                        {
-                            new SimpleBuffDescription("HEART WOUND"),
-                            new SimpleBuffDescription("Catastrophic internal bleeding")
-                        })
-                };
-            }
+            get { return BuildDisplayableVariations(this); }
         }
+
+        internal static EffectDescription[] BuildDisplayableVariations(
+            IHealthEffect effect) =>
+            new[]
+            {
+                new EffectDescription(effect, true,
+                    new List<SimpleBuffDescription>
+                    {
+                        new SimpleBuffDescription("HEART WOUND"),
+                        new SimpleBuffDescription("Catastrophic internal bleeding")
+                    })
+            };
 
         internal static void EnsureIconRegistered()
         {

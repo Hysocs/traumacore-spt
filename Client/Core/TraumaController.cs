@@ -2,7 +2,7 @@ using EFT;
 using EFT.Ballistics;
 using EFT.HealthSystem;
 using Comfort.Common;
-using TraumaCore.Patches;
+using TraumaCore.Patches.Trauma;
 using Systems.Effects;
 using UnityEngine;
 using System.Collections.Generic;
@@ -189,7 +189,23 @@ namespace TraumaCore
                 _health.EffectRemovedEvent += OnEffectRemoved;
                 _health.EffectResidualEvent += OnEffectResidual;
                 _subscribed = true;
+                RestoreBruiseState();
             }
+            enabled = HasRecurringWork();
+        }
+
+        private void RestoreBruiseState()
+        {
+            _bruiseUiEffect = _health?.FindExistingEffect<BruisedHealthEffect>(
+                EBodyPart.Chest);
+            if (_bruiseUiEffect == null)
+                return;
+
+            _bruiseStrength = Mathf.Clamp01(_bruiseUiEffect.Strength);
+            _currentBruiseStrength = _bruiseStrength;
+            _bruiseExpires = Time.unscaledTime + Mathf.Max(
+                0f,
+                _bruiseUiEffect.TimeLeft);
         }
 
         internal void AddChestWound(float originalBulletDamage)
@@ -290,6 +306,7 @@ namespace TraumaCore
             float divisor, float scale = 1f, bool heart = false, bool head = false)
         {
             if (_health == null || track == null) return false;
+            enabled = true;
             float severity = track.Add(originalDamage, divisor, scale);
             AddDebugBloodSource(severity, heart, head, bodyPart);
             EnsureMarkers();
@@ -322,6 +339,10 @@ namespace TraumaCore
             _lastImpactDirection = direction.sqrMagnitude > 0.0001f
                 ? direction.normalized : Vector3.forward;
             _lastImpactTransform = hitTransform;
+            if (!OrganSystem.DebugEsp.Value)
+                return;
+
+            enabled = true;
             if (_impacts.Count >= 12) _impacts.RemoveAt(0);
             _impacts.Add(new DebugImpact
             {
@@ -341,6 +362,7 @@ namespace TraumaCore
 
         internal void AddBruise(float stoppedBulletDamage)
         {
+            enabled = true;
             float existing = _currentBruiseStrength;
             _bruiseStrength = Mathf.Clamp01(existing + Mathf.Max(0f, stoppedBulletDamage) / 100f);
             _bruiseExpires = Time.unscaledTime + BruiseDuration;
@@ -384,13 +406,21 @@ namespace TraumaCore
             UpdateDebugBlood();
             for (int i = _impacts.Count - 1; i >= 0; i--)
                 if (_impacts[i].Expires <= Time.unscaledTime) _impacts.RemoveAt(i);
-            if (_health == null || !_health.IsAlive) return;
+            if (_health == null || !_health.IsAlive)
+            {
+                DisableWhenIdle();
+                return;
+            }
             bool bloodLossBlockerActive = _health.HasBloodLossBlockers();
             if (bloodLossBlockerActive && !_bloodLossBlockerWasActive)
                 ClearLinkedTreatableBleeds();
             _bloodLossBlockerWasActive = bloodLossBlockerActive;
             if (!_chestWounds.Active && !_heartWounds.Active && !_faceWounds.Active &&
-                _bodyWounds.Count == 0) return;
+                _bodyWounds.Count == 0)
+            {
+                DisableWhenIdle();
+                return;
+            }
             _traumaAccumulator += Time.deltaTime;
             if (_traumaAccumulator < TraumaStep) return;
             float deltaTime = _traumaAccumulator;
@@ -444,7 +474,10 @@ namespace TraumaCore
         private void AddDebugBloodSource(float strength, bool heart, bool head,
             EBodyPart bodyPart)
         {
-            if (_player == null || strength <= 0f) return;
+            if (_player == null || strength <= 0f || !OrganSystem.BloodEffects.Value)
+                return;
+
+            enabled = true;
             Transform attachment = _lastImpactTransform != null
                 ? _lastImpactTransform : _player.gameObject.transform;
             int visualKey = ((int)bodyPart << 1) | (heart ? 1 : 0);
@@ -497,6 +530,13 @@ namespace TraumaCore
 
         private void UpdateDebugBlood()
         {
+            if (!OrganSystem.BloodEffects.Value)
+            {
+                _bloodSources.Clear();
+                _bloodParticles.Clear();
+                return;
+            }
+
             float now = Time.unscaledTime;
             float dt = Mathf.Min(Time.unscaledDeltaTime, 0.05f);
             for (int i = _bloodParticles.Count - 1; i >= 0; i--)
@@ -538,7 +578,7 @@ namespace TraumaCore
             }
             _wasAlive = alive;
 
-            if (!OrganSystem.BloodEffects.Value || (!alive && _corpseBloodReserve <= 0f))
+            if (!alive && _corpseBloodReserve <= 0f)
                 return;
 
             float blockerMultiplier = GetTreatableBleedMultiplier();
@@ -645,6 +685,9 @@ namespace TraumaCore
 
         private void UpdateBruising()
         {
+            if (_bruiseStrength <= 0f && Mathf.Approximately(_appliedRestorePenalty, 0f))
+                return;
+
             if (_player == null || _player.Physical == null) return;
             if (!Mathf.Approximately(_appliedRestorePenalty, 0f))
                 _player.Physical.RestoreRateBuff -= _appliedRestorePenalty;
@@ -655,6 +698,25 @@ namespace TraumaCore
             _appliedRestorePenalty = -_player.Physical.StaminaRestoreRate *
                 0.30f * _currentBruiseStrength;
             _player.Physical.RestoreRateBuff += _appliedRestorePenalty;
+        }
+
+        private bool HasRecurringWork()
+        {
+            bool hasActiveTrauma = _health != null && _health.IsAlive &&
+                (_chestWounds.Active || _heartWounds.Active || _faceWounds.Active ||
+                 _bodyWounds.Count > 0);
+            return hasActiveTrauma ||
+                   _bruiseStrength > 0f ||
+                   !Mathf.Approximately(_appliedRestorePenalty, 0f) ||
+                   _impacts.Count > 0 ||
+                   _bloodSources.Count > 0 ||
+                   _bloodParticles.Count > 0;
+        }
+
+        private void DisableWhenIdle()
+        {
+            if (!HasRecurringWork())
+                enabled = false;
         }
 
         private float GetShareFraction(EBodyPart source)

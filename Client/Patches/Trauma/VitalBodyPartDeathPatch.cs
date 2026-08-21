@@ -4,7 +4,7 @@ using EFT.HealthSystem;
 using HarmonyLib;
 using SPT.Reflection.Patching;
 
-namespace TraumaCore.Patches
+namespace TraumaCore.Patches.Trauma
 {
     public sealed class VitalBodyPartDeathPatch : ModulePatch
     {

@@ -1,6 +1,7 @@
 using System;
 using BepInEx.Configuration;
 using EFT;
+using EFT.Ballistics;
 using EFT.HealthSystem;
 using UnityEngine;
 
@@ -9,6 +10,8 @@ namespace TraumaCore
     public sealed partial class Plugin
     {
         private const float TestShotDamage = 50f;
+        private const float TestHitDamage = 5f;
+        private static int _nextTestFireIndex = 100000;
 
         private void BindEffectTestButtons()
         {
@@ -35,6 +38,65 @@ namespace TraumaCore
                 (trauma, player) => trauma.AddBruise(GetTestDamage(player)));
             BindEffectTestButton("Apply Spine Fracture", 30,
                 "Applies the native fracture effect to the chest.", ApplySpineFracture);
+            BindEffectTestButton("Apply Hit Pressure", 25,
+                "Adds one hit-pressure stack for visual testing.", ApplyHitPressure);
+            BindHitboxTestButtons();
+        }
+
+        private void BindHitboxTestButtons()
+        {
+            BindEffectTestButton("Inflict Head Hit", 20,
+                "Inflicts and records a small test hit on the head.",
+                (trauma, player) => InflictTestHit(player, EBodyPart.Head));
+            BindEffectTestButton("Inflict Chest Hit", 19,
+                "Inflicts and records a small test hit on the chest.",
+                (trauma, player) => InflictTestHit(player, EBodyPart.Chest));
+            BindEffectTestButton("Inflict Stomach Hit", 18,
+                "Inflicts and records a small test hit on the stomach.",
+                (trauma, player) => InflictTestHit(player, EBodyPart.Stomach));
+            BindEffectTestButton("Inflict Left Arm Hit", 17,
+                "Inflicts and records a small test hit on the left arm.",
+                (trauma, player) => InflictTestHit(player, EBodyPart.LeftArm));
+            BindEffectTestButton("Inflict Right Arm Hit", 16,
+                "Inflicts and records a small test hit on the right arm.",
+                (trauma, player) => InflictTestHit(player, EBodyPart.RightArm));
+            BindEffectTestButton("Inflict Left Leg Hit", 15,
+                "Inflicts and records a small test hit on the left leg.",
+                (trauma, player) => InflictTestHit(player, EBodyPart.LeftLeg));
+            BindEffectTestButton("Inflict Right Leg Hit", 14,
+                "Inflicts and records a small test hit on the right leg.",
+                (trauma, player) => InflictTestHit(player, EBodyPart.RightLeg));
+        }
+
+        private static void InflictTestHit(Player player, EBodyPart bodyPart)
+        {
+            ActiveHealthController healthController = player.ActiveHealthController;
+            if (healthController == null || !healthController.IsAlive)
+                return;
+
+            Transform bodyPartAnchor =
+                Features.DeathScreen.HitMarkers.BodyPartAnchorResolver.Find(
+                    player.gameObject.transform,
+                    bodyPart);
+            if (bodyPartAnchor == null)
+            {
+                Log?.LogWarning(
+                    $"[EffectTest] Cannot inflict {bodyPart} hit: bone anchor missing");
+                return;
+            }
+
+            Vector3 localOffset = new Vector3(0.025f, 0f, 0.015f);
+            DamageInfo testHit = new DamageInfo
+            {
+                DamageType = EDamageType.Bullet,
+                Damage = TestHitDamage,
+                HitPoint = bodyPartAnchor.TransformPoint(localOffset),
+                HitNormal = Vector3.back,
+                Direction = Vector3.forward,
+                FireIndex = _nextTestFireIndex++
+            };
+            healthController.ApplyDamage(bodyPart, TestHitDamage, testHit);
+            HitPressureResponse.Apply(healthController, bodyPart);
         }
 
         private static float GetTestDamage(Player player)
@@ -44,8 +106,18 @@ namespace TraumaCore
         {
             ActiveHealthController health = player.ActiveHealthController;
             if (health.FindExistingEffect<IFracture>(EBodyPart.Chest) == null)
-                health.AddEffect<SpinalFractureHealthEffect>(
+                health.AddEffect<ActiveHealthController.Fracture>(
                     EBodyPart.Chest, 0f, null, null, null);
+        }
+
+        private static void ApplyHitPressure(TraumaController trauma, Player player)
+        {
+            HitPressureApplication application = HitPressureResponse.Apply(
+                player.ActiveHealthController,
+                EBodyPart.Chest);
+            Log?.LogInfo(
+                $"[EffectTest] Hit pressure strength={application.Strength:P0}, " +
+                $"healthEffect={(application.IsHealthEffectApplied ? "applied" : "failed")}");
         }
 
         private void BindEffectTestButton(string name, int order, string description,

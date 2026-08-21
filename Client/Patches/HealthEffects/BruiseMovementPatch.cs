@@ -5,7 +5,7 @@ using HarmonyLib;
 using SPT.Reflection.Patching;
 using UnityEngine;
 
-namespace TraumaCore.Patches
+namespace TraumaCore.Patches.HealthEffects
 {
     public sealed class BruiseMovementPatch : ModulePatch
     {
@@ -36,8 +36,8 @@ namespace TraumaCore.Patches
                 return;
             ActiveHealthController health = __instance.ActiveHealthController;
             bool spinalFracture =
-                health.FindExistingEffect<ISpinalFracture>(EBodyPart.Chest) != null ||
-                health.FindExistingEffect<ISpinalFracture>(EBodyPart.Stomach) != null;
+                health.FindExistingEffect<IFracture>(EBodyPart.Chest) != null ||
+                health.FindExistingEffect<IFracture>(EBodyPart.Stomach) != null;
             if (!spinalFracture) return;
 
             if (health.FindExistingEffect<IPainKiller>() != null) return;

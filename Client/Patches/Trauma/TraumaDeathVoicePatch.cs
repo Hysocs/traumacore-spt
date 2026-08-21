@@ -3,7 +3,7 @@ using EFT;
 using HarmonyLib;
 using SPT.Reflection.Patching;
 
-namespace TraumaCore.Patches
+namespace TraumaCore.Patches.Trauma
 {
     public sealed class TraumaDeathVoicePatch : ModulePatch
     {

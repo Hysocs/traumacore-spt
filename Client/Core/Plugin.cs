@@ -4,13 +4,14 @@ using System.Text;
 using BepInEx;
 using BepInEx.Logging;
 using Comfort.Common;
-using TraumaCore.Patches;
+using TraumaCore.Patches.Armor;
 using EFT;
 using EFT.HealthSystem;
 using SPT.Reflection.Patching;
 using Systems.Effects;
 using UnityEngine;
 using UnityEngine.UI;
+using TraumaCore.Visuals;
 
 namespace TraumaCore
 {
@@ -76,6 +77,7 @@ namespace TraumaCore
         private void Awake()
         {
             Log = Logger;
+            CustomHealthEffectRegistry.Register();
             OrganSystem.InitializeOrganSettings(Config);
             BindEffectTestButtons();
             _patchManager = new PatchManager(this, autoPatch: true);
@@ -90,8 +92,8 @@ namespace TraumaCore
             {
                 await EFTHardSettings.Load();
                 BruisedHealthEffect.EnsureIconRegistered();
+                HitPressureHealthEffect.EnsureIconRegistered();
                 HeartWoundHealthEffect.EnsureIconRegistered();
-                SpinalFractureHealthEffect.EnsureIconRegistered();
             }
             catch (Exception exception)
             {
@@ -102,6 +104,9 @@ namespace TraumaCore
         private void Update()
         {
             UpdateBloodParticlesIndependent();
+            if (_world != null && _localPlayer != null)
+                return;
+
             if (Time.unscaledTime < _nextWorldRefresh)
                 return;
 
@@ -1122,6 +1127,7 @@ namespace TraumaCore
         private void OnDestroy()
         {
             _shuttingDown = true;
+            HitPressureVignette.RemoveOverlay();
             Canvas.preWillRenderCanvases -= RenderFrame;
             DetachWorld();
             if (_patchManager != null) _patchManager.DisablePatches();

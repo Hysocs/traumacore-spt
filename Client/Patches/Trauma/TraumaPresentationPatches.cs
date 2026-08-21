@@ -5,7 +5,7 @@ using EFT.HealthSystem;
 using HarmonyLib;
 using SPT.Reflection.Patching;
 
-namespace TraumaCore.Patches
+namespace TraumaCore.Patches.Trauma
 {
     internal static class TraumaPresentationContext
     {

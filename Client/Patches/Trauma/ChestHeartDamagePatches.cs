@@ -5,9 +5,10 @@ using EFT.Ballistics;
 using EFT.HealthSystem;
 using HarmonyLib;
 using SPT.Reflection.Patching;
+using TraumaCore.Patches.HitPressure;
 using UnityEngine;
 
-namespace TraumaCore.Patches
+namespace TraumaCore.Patches.Trauma
 {
     public sealed class BodyTraumaPatch : ModulePatch
     {
@@ -29,6 +30,7 @@ namespace TraumaCore.Patches
             EBodyPart bodyPartType, ref HitState __state)
         {
             DeterministicFracturePatch.InsideShot = false;
+            HitPresentationDamageContext.Clear();
             if (!OrganSystem.Enabled.Value || __instance == null ||
                 bodyPartType == EBodyPart.Common)
                 return;
@@ -42,6 +44,9 @@ namespace TraumaCore.Patches
                 __state.Processed = true;
                 __state.BodyPart = bodyPartType;
                 __state.OriginalDamage = damageInfo.Damage;
+                HitPresentationDamageContext.Capture(
+                    bodyPartType,
+                    __state.OriginalDamage);
                 __state.TargetMultiplier = rules.DamageMultiplier;
                 __state.EffectiveDamage = __state.OriginalDamage * __state.TargetMultiplier;
                 __state.LocalShot = damageInfo.HaveOwner && damageInfo.Player.iPlayer.IsYourPlayer;
@@ -175,6 +180,7 @@ namespace TraumaCore.Patches
                 LogHit(__state, trauma);
             }
             catch (Exception e) { Plugin.Log.LogError("[OrganHit] Trauma application failed: " + e); }
+            finally { HitPresentationDamageContext.Clear(); }
         }
 
         private static TraumaController GetOrCreateTrauma(Player player)
@@ -201,7 +207,7 @@ namespace TraumaCore.Patches
                 ? EBodyPart.Stomach : EBodyPart.Chest;
             if (!state.Brain && state.ThoracicSpine && !HasFracture(player, spinalPart))
             {
-                health.AddEffect<SpinalFractureHealthEffect>(
+                health.AddEffect<ActiveHealthController.Fracture>(
                     spinalPart, 0f, null, null, null);
                 LogDebug("[SpineHit] Spine intersected: " + spinalPart +
                     " spinal fracture applied");
@@ -248,10 +254,12 @@ namespace TraumaCore.Patches
             if (OrganSystem.DebugLogging.Value) Plugin.Log.LogInfo(message);
         }
 
+        [PatchFinalizer]
         private static Exception Finalizer(Exception __exception)
         {
             DeterministicFracturePatch.InsideShot = false;
             DeterministicFracturePatch.AllowNextFracture = false;
+            HitPresentationDamageContext.Clear();
             return __exception;
         }
 

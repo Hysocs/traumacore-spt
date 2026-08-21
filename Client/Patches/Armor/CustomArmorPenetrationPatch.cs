@@ -11,7 +11,7 @@ using HarmonyLib;
 using SPT.Reflection.Patching;
 using UnityEngine;
 
-namespace TraumaCore.Patches
+namespace TraumaCore.Patches.Armor
 {
     public sealed class CustomArmorPenetrationPatch : ModulePatch
     {

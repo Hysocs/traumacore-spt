@@ -4,7 +4,7 @@ using EFT.InventoryLogic;
 using HarmonyLib;
 using SPT.Reflection.Patching;
 
-namespace TraumaCore
+namespace TraumaCore.Patches.HealthEffects
 {
     public sealed class BloodLossStimDescriptionPatch : ModulePatch
     {

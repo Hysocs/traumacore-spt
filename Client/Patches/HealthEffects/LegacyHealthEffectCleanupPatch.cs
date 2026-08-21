@@ -6,13 +6,12 @@ using EFT.InventoryLogic;
 using HarmonyLib;
 using SPT.Reflection.Patching;
 
-namespace TraumaCore.Patches
+namespace TraumaCore.Patches.HealthEffects
 {
     public sealed class LegacyHealthEffectCleanupPatch : ModulePatch
     {
         private static readonly string[] LegacyEffectNames =
         {
-            "BruisedHealthEffect",
             "HeartWoundHealthEffect",
             "SpinalFractureHealthEffect"
         };
@@ -51,22 +50,4 @@ namespace TraumaCore.Patches
         }
     }
 
-    public sealed class PreventTraumaEffectPersistencePatch : ModulePatch
-    {
-        protected override MethodBase GetTargetMethod()
-        {
-            foreach (MethodInfo method in AccessTools.GetDeclaredMethods(
-                typeof(ActiveHealthController)))
-                if (method.Name == nameof(ActiveHealthController.Store) &&
-                    method.ReturnType == typeof(Profile.HealthInfo))
-                    return method;
-            return null;
-        }
-
-        [PatchPostfix]
-        private static void PatchPostfix(ref Profile.HealthInfo __result)
-        {
-            LegacyHealthEffectCleanupPatch.RemoveLegacyEffects(__result, false);
-        }
-    }
 }

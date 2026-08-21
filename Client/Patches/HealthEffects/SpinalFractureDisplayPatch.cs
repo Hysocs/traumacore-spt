@@ -5,7 +5,7 @@ using EFT.HealthSystem;
 using HarmonyLib;
 using SPT.Reflection.Patching;
 
-namespace TraumaCore.Patches
+namespace TraumaCore.Patches.HealthEffects
 {
     public sealed class SpinalFractureDisplayPatch : ModulePatch
     {

@@ -3,7 +3,8 @@ using EFT.HealthSystem;
 
 namespace TraumaCore
 {
-    internal interface IBruised : IHealthEffect, IEffectTriggersUIPanel { }
+    internal interface IBruised : IHealthEffect, IEffectTriggersUIPanel,
+        IRestorable { }
 
     internal sealed class BruisedHealthEffect : ActiveHealthController.Effect, IBruised
     {
@@ -12,21 +13,25 @@ namespace TraumaCore
         public override float DefaultBuildUpTime { get { return 0f; } }
         public override float DefaultResidueTime { get { return 0f; } }
 
+        public override EFT.Profile.HealthInfo.EffectInfo Store() =>
+            new EFT.Profile.HealthInfo.EffectInfo { Time = TimeLeft };
+
         public override EffectDescription[] DisplayableVariations
         {
-            get
-            {
-                return new[]
-                {
-                    new EffectDescription(this, true, new List<SimpleBuffDescription>
-                    {
-                        new SimpleBuffDescription("BRUISED"),
-                        new SimpleBuffDescription("Reduced movement speed"),
-                        new SimpleBuffDescription("Reduced stamina recovery")
-                    })
-                };
-            }
+            get { return BuildDisplayableVariations(this); }
         }
+
+        internal static EffectDescription[] BuildDisplayableVariations(
+            IHealthEffect effect) =>
+            new[]
+            {
+                new EffectDescription(effect, true, new List<SimpleBuffDescription>
+                {
+                    new SimpleBuffDescription("BRUISED"),
+                    new SimpleBuffDescription("Reduced movement speed"),
+                    new SimpleBuffDescription("Reduced stamina recovery")
+                })
+            };
 
         internal static void EnsureIconRegistered()
         {

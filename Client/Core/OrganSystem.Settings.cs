@@ -50,9 +50,9 @@ namespace TraumaCore
         {
             Enabled = config.Bind("General", "Enabled", true,
                 Ui("Enable organ damage zones", "01 - General", "Enable Overhaul", 100));
-            DirectDamagePercent = config.Bind("Damage", "DirectDamagePercentV2", 0.15f,
+            DirectDamagePercent = config.Bind("Damage", "DirectDamagePercentV2", 0.35f,
                 Ui("Immediate bullet damage fraction before trauma", "02 - Global Damage",
-                    "Direct Bullet Damage", 100, new AcceptableValueRange<float>(0f, 0.25f)));
+                    "Direct Bullet Damage", 100, new AcceptableValueRange<float>(0f, 1f)));
             BloodEffects = config.Bind("Visuals", "WorldBloodEffects", true,
                 Ui("Render procedural world-space blood particles from trauma wounds",
                     "07 - Debug & Visuals", "World Blood Effects", 100));
