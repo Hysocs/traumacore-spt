@@ -96,7 +96,7 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
             if (anchor == null)
             {
                 if (OrganSystem.DebugLogging.Value)
-                    Plugin.Log?.LogWarning(
+                    TraumaLog.Warning(
                         $"[DeathScreenHitMarkers] Could not capture {bodyPart} impact: " +
                         "live bone anchor missing");
                 return;
@@ -125,7 +125,7 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
                 LatestImpactSequenceByProfileId[profile.Id] = sequence;
                 recordedDamage.DirectHits++;
                 if (OrganSystem.DebugLogging.Value)
-                    Plugin.Log?.LogInfo(
+                    TraumaLog.Info(
                         $"[DeathScreenHitMarkers] Captured {bodyPart} impact " +
                         $"fireIndex={damageInfo.FireIndex}, anchor={anchor.name}, " +
                         $"local=({localPoint.x:F3}, {localPoint.y:F3}, {localPoint.z:F3})");

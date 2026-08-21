@@ -54,7 +54,7 @@ namespace TraumaCore.Patches.Trauma
             }
             catch (System.Exception exception)
             {
-                Plugin.Log.LogError("[DeathVoice] Failed to play forced death phrase: " +
+                TraumaLog.Error("[DeathVoice] Failed to play forced death phrase: " +
                     exception);
             }
         }

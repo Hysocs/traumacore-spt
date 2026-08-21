@@ -112,7 +112,7 @@ namespace TraumaCore.Patches.Trauma
                     Mathf.Max(0f, currentPart - 1f));
                 __state.FinalDamage = damageInfo.Damage;
             }
-            catch (Exception e) { Plugin.Log.LogError("[OrganHit] Classification failed: " + e); }
+            catch (Exception e) { TraumaLog.Error("[OrganHit] Classification failed: " + e); }
         }
 
         private static OrganDefinition ResolveOrgan(EBodyPart bodyPart, TargetRules rules)
@@ -179,7 +179,7 @@ namespace TraumaCore.Patches.Trauma
 
                 LogHit(__state, trauma);
             }
-            catch (Exception e) { Plugin.Log.LogError("[OrganHit] Trauma application failed: " + e); }
+            catch (Exception e) { TraumaLog.Error("[OrganHit] Trauma application failed: " + e); }
             finally { HitPresentationDamageContext.Clear(); }
         }
 
@@ -232,7 +232,7 @@ namespace TraumaCore.Patches.Trauma
             Vector3 hitboxSize = state.BodyPart == EBodyPart.Head
                 ? OrganSystem.Brain.HalfExtents * 2f
                 : state.BodyPart == EBodyPart.Chest ? OrganSystem.Heart.HalfExtents * 2f : Vector3.zero;
-            Plugin.Log.LogInfo(string.Format(
+            TraumaLog.Info(string.Format(
                 "[OrganHit] {0} | ray travel={1:F3}m size={2} | source={3:F1} target-x={4:F2} direct={5:F1} (x{6:F3}) | chest-stacks={7}",
                 GetHitLabel(state), state.Distance, hitboxSize, state.OriginalDamage,
                 state.TargetMultiplier, state.FinalDamage, state.Multiplier,
@@ -251,7 +251,7 @@ namespace TraumaCore.Patches.Trauma
 
         private static void LogDebug(string message)
         {
-            if (OrganSystem.DebugLogging.Value) Plugin.Log.LogInfo(message);
+            TraumaLog.Info(message);
         }
 
         [PatchFinalizer]

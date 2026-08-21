@@ -42,7 +42,7 @@ namespace TraumaCore.Patches.HitPressure
 
             if (OrganSystem.DebugLogging.Value)
             {
-                Plugin.Log.LogInfo(
+                TraumaLog.Info(
                     $"[HitPressure] {part} {type}: body={damage:0.##}, " +
                     $"armor={absorbed:0.##}, strength={application.Strength:P0}, " +
                     $"healthEffect={(application.IsHealthEffectApplied ? "applied" : "failed")}");

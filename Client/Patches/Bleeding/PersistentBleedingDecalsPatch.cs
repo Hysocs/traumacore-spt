@@ -18,7 +18,7 @@ namespace TraumaCore.Patches.Bleeding
         private static void PatchPrefix(DeferredDecalRenderer __instance)
         {
             __instance._maxDecals = PersistentStaticDecalCapacity;
-            Plugin.Log.LogInfo(
+            TraumaLog.Info(
                 "[BloodDecals] Static decal capacity set to " +
                 PersistentStaticDecalCapacity);
         }

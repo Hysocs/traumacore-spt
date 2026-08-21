@@ -136,7 +136,7 @@ namespace TraumaCore.Patches.Armor
 
                 __result = durabilityDamage;
                 if (OrganSystem.DebugLogging.Value)
-                    Plugin.Log.LogInfo(string.Format(
+                    TraumaLog.Info(string.Format(
                         "[ArmorPen] {0} | class={1} durability={2:0.0}/{3:0.0} ({4:P0}) " +
                         "pen={5:0.0} requirement={6:0.0} chance={7:P1} roll={8:P1} " +
                         "loss={9:0.00} weakSpot={10:0.0}x",
@@ -148,7 +148,7 @@ namespace TraumaCore.Patches.Armor
             }
             catch (Exception exception)
             {
-                Plugin.Log.LogError("[ArmorPen] Custom calculation failed; using EFT fallback: " + exception);
+                TraumaLog.Error("[ArmorPen] Custom calculation failed; using EFT fallback: " + exception);
                 return true;
             }
         }

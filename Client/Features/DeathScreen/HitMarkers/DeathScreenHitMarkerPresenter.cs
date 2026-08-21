@@ -37,8 +37,8 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                 exitStatus != ExitStatus.MissingInAction)
                 return;
 
-            DamageHistory history = activeProfile?.EftStats?.DamageHistory;
-            if (history == null)
+            DamageHistory damageHistory = activeProfile?.EftStats?.DamageHistory;
+            if (damageHistory == null)
                 return;
 
             PlayerModelView modelView = screen._playerModelView;
@@ -54,7 +54,7 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                     modelView,
                     screen._bodyPartLabel,
                     activeProfile,
-                    history));
+                    damageHistory));
         }
 
         private static IEnumerator CreateMarkersWhenModelReady(
@@ -62,7 +62,7 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
             PlayerModelView modelView,
             TextMeshProUGUI originalLabel,
             Profile activeProfile,
-            DamageHistory history)
+            DamageHistory damageHistory)
         {
             float timeoutSeconds = 10f;
 
@@ -74,66 +74,70 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
 
             if (!modelView.LoadingComplete)
             {
-                Plugin.Log?.LogWarning(
+                TraumaLog.Warning(
                     "[DeathScreenHitMarkers] Player model did not finish loading within 10 seconds");
                 yield break;
             }
 
             yield return null;
 
-            Dictionary<EBodyPart, Transform> bones =
+            Dictionary<EBodyPart, Transform> anchorsByBodyPart =
                 BodyPartAnchorResolver.Resolve(modelView);
 
-            BodyPartAnchorResolver.LogResolution(modelView, bones);
+            BodyPartAnchorResolver.LogResolution(modelView, anchorsByBodyPart);
 
-            ModelPreview preview =
-                FindModelPreview(modelView, bones);
+            ModelPreview modelPreview =
+                FindModelPreview(modelView, anchorsByBodyPart);
 
-            if (preview == null)
+            if (modelPreview == null)
             {
-                Plugin.Log?.LogWarning(
+                TraumaLog.Warning(
                     "[DeathScreenHitMarkers] Could not match the model camera to a RawImage preview");
                 yield break;
             }
 
-            List<BodyPartMarker> markers =
-                CreateBodyPartMarkers(activeProfile, history, bones, preview);
+            List<BodyPartMarker> bodyPartMarkers =
+                CreateBodyPartMarkers(
+                    activeProfile,
+                    damageHistory,
+                    anchorsByBodyPart,
+                    modelPreview);
 
-            if (markers.Count == 0)
+            if (bodyPartMarkers.Count == 0)
             {
-                Plugin.Log?.LogWarning(
+                TraumaLog.Warning(
                     "[DeathScreenHitMarkers] No body-part markers were created");
                 yield break;
             }
 
-            Plugin.Log?.LogInfo(
-                $"[DeathScreenHitMarkers] Created {markers.Count} body-part labels");
+            TraumaLog.Info(
+                $"[DeathScreenHitMarkers] Created {bodyPartMarkers.Count} body-part labels");
 
             if (originalLabel != null)
                 originalLabel.gameObject.SetActive(false);
 
             while (screen != null &&
-                   preview.Image != null &&
-                   preview.Camera != null &&
-                   preview.Container != null &&
+                   modelPreview.Image != null &&
+                   modelPreview.Camera != null &&
+                   modelPreview.Container != null &&
                    screen.gameObject.activeInHierarchy)
             {
-                UpdateMarkerPositions(preview, markers);
+                UpdateMarkerPositions(modelPreview, bodyPartMarkers);
                 yield return null;
             }
         }
 
         private static ModelPreview FindModelPreview(
             PlayerModelView modelView,
-            Dictionary<EBodyPart, Transform> bones)
+            IReadOnlyDictionary<EBodyPart, Transform> anchorsByBodyPart)
         {
-            if (bones.Count == 0)
+            if (anchorsByBodyPart.Count == 0)
                 return null;
 
             Transform reference =
-                bones.TryGetValue(EBodyPart.Chest, out Transform chest)
-                    ? chest
-                    : bones.Values.First();
+                anchorsByBodyPart.TryGetValue(EBodyPart.Chest, out Transform chestAnchor)
+                    ? chestAnchor
+                    : anchorsByBodyPart.First().Value;
 
             RawImage[] images = modelView.transform.parent
                 .GetComponentsInChildren<RawImage>(true);
@@ -160,7 +164,7 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                 if (image == null)
                     continue;
 
-                Plugin.Log?.LogInfo(
+                TraumaLog.Info(
                     $"[DeathScreenHitMarkers] Matched camera '{camera.name}' to preview " +
                     $"'{image.name}' ({image.rectTransform.rect.width:F0}x" +
                     $"{image.rectTransform.rect.height:F0})");
@@ -222,21 +226,21 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                 if (pointerData.button == PointerEventData.InputButton.Left)
                     rotation.Rotate(pointerData.delta.x);
             };
-            Plugin.Log?.LogInfo(
+            TraumaLog.Info(
                 "[DeathScreenHitMarkers] Enabled left-drag model rotation");
         }
 
         private static List<BodyPartMarker> CreateBodyPartMarkers(
             Profile activeProfile,
-            DamageHistory history,
-            Dictionary<EBodyPart, Transform> bones,
-            ModelPreview preview)
+            DamageHistory damageHistory,
+            IReadOnlyDictionary<EBodyPart, Transform> anchorsByBodyPart,
+            ModelPreview modelPreview)
         {
             List<BodyPartMarker> markers = new List<BodyPartMarker>();
 
             foreach (EBodyPart bodyPart in BodyPartAnchorResolver.BodyParts)
             {
-                history.BodyParts.TryGetValue(
+                damageHistory.BodyParts.TryGetValue(
                     bodyPart,
                     out List<DamageStats> bodyPartDamageHistory);
                 bool hasRecordedDamage =
@@ -246,10 +250,13 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                         out _);
 
                 int historyEntries = bodyPartDamageHistory?.Count ?? 0;
-                bool hasBone = bones.TryGetValue(bodyPart, out Transform bone);
-                Plugin.Log?.LogInfo(
+                bool hasAnchor = anchorsByBodyPart.TryGetValue(
+                    bodyPart,
+                    out Transform bodyPartAnchor);
+                TraumaLog.Info(
                     $"[DeathScreenHitMarkers] {bodyPart}: historyEntries={historyEntries}, " +
-                    $"recorded={hasRecordedDamage}, anchor={(hasBone ? bone.name : "missing")}");
+                    $"recorded={hasRecordedDamage}, " +
+                    $"anchor={(hasAnchor ? bodyPartAnchor.name : "missing")}");
 
                 bool shouldAlwaysShowLabel =
                     bodyPart == EBodyPart.Head ||
@@ -258,11 +265,11 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                 bool shouldCreateLabel = historyEntries > 0 ||
                     hasRecordedDamage ||
                     shouldAlwaysShowLabel;
-                if (!shouldCreateLabel || !hasBone)
+                if (!shouldCreateLabel || !hasAnchor)
                 {
-                    Plugin.Log?.LogWarning(
+                    TraumaLog.Warning(
                         $"[DeathScreenHitMarkers] Skipped {bodyPart}: " +
-                        $"{(!hasBone ? "anchor missing" : "no damage history or recording")}");
+                        $"{(!hasAnchor ? "anchor missing" : "no damage history or recording")}");
                     continue;
                 }
 
@@ -280,7 +287,7 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
 
                 BodyPartMarker marker = new()
                 {
-                    Bone = bone,
+                    Bone = bodyPartAnchor,
                     BodyPart = bodyPart,
                     MaximumHealth = FindMaximumBodyPartHealth(activeProfile, bodyPart),
                     DirectHits = directHits,
@@ -305,7 +312,7 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                         marker.RecordedImpacts.Add(impact);
                 }
 
-                CreateMarkerVisuals(preview.Container, marker);
+                CreateMarkerVisuals(modelPreview.Container, marker);
                 markers.Add(marker);
             }
 
@@ -333,7 +340,7 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
         private static void EvaluateDamageSummary(
             Profile profile,
             EBodyPart bodyPart,
-            List<DamageStats> history,
+            List<DamageStats> bodyPartDamageHistory,
             out int directHits,
             out float directDamage,
             out float bleedDamage,
@@ -357,10 +364,10 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                 return;
             }
 
-            List<DamageStats> directDamageHistory = history
+            List<DamageStats> directDamageHistory = bodyPartDamageHistory
                 .Where(x => !DeathScreenDamageTracker.IsBleeding(x.Type))
                 .ToList();
-            List<DamageStats> bleedDamageHistory = history
+            List<DamageStats> bleedDamageHistory = bodyPartDamageHistory
                 .Where(x => DeathScreenDamageTracker.IsBleeding(x.Type))
                 .ToList();
 
@@ -512,22 +519,22 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
         }
 
         private static void UpdateMarkerPositions(
-            ModelPreview preview,
-            List<BodyPartMarker> markers)
+            ModelPreview modelPreview,
+            List<BodyPartMarker> bodyPartMarkers)
         {
-            Rect bounds = preview.Container.rect;
+            Rect bounds = modelPreview.Container.rect;
             float responsiveLabelWidthPixels = Mathf.Clamp(
                 bounds.width * LabelWidthFraction,
                 MinimumLabelWidthPixels,
                 LabelWidthPixels);
             bool labelWidthChanged = !Mathf.Approximately(
-                preview.LabelWidthPixels,
+                modelPreview.LabelWidthPixels,
                 responsiveLabelWidthPixels);
-            preview.LabelWidthPixels = responsiveLabelWidthPixels;
-            preview.VisibleLeftMarkers.Clear();
-            preview.VisibleRightMarkers.Clear();
+            modelPreview.LabelWidthPixels = responsiveLabelWidthPixels;
+            modelPreview.VisibleLeftMarkers.Clear();
+            modelPreview.VisibleRightMarkers.Clear();
 
-            foreach (BodyPartMarker marker in markers)
+            foreach (BodyPartMarker marker in bodyPartMarkers)
             {
                 if (labelWidthChanged)
                     marker.Label.sizeDelta = new Vector2(
@@ -535,7 +542,7 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                         LabelHeightPixels);
 
                 Vector3 viewport =
-                    preview.Camera.WorldToViewportPoint(
+                    modelPreview.Camera.WorldToViewportPoint(
                         marker.Bone.position);
 
                 bool visible = viewport.z > 0f;
@@ -543,7 +550,7 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                 if (!marker.HasLoggedProjection)
                 {
                     marker.HasLoggedProjection = true;
-                    Plugin.Log?.LogInfo(
+                    TraumaLog.Info(
                         $"[DeathScreenHitMarkers] {marker.BodyPart} projection: " +
                         $"viewport=({viewport.x:F3}, {viewport.y:F3}, {viewport.z:F3}), " +
                         $"labelVisible={visible}, impacts={marker.Impacts.Count}, " +
@@ -562,13 +569,13 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                 }
 
                 if (marker.LeftSide)
-                    preview.VisibleLeftMarkers.Add(marker);
+                    modelPreview.VisibleLeftMarkers.Add(marker);
                 else
-                    preview.VisibleRightMarkers.Add(marker);
+                    modelPreview.VisibleRightMarkers.Add(marker);
 
                 foreach (BulletImpactVisual impact in marker.Impacts)
                 {
-                    Vector3 impactViewport = preview.Camera.WorldToViewportPoint(
+                    Vector3 impactViewport = modelPreview.Camera.WorldToViewportPoint(
                         marker.Bone.TransformPoint(impact.LocalPoint));
                     bool impactVisible = impactViewport.z > 0f &&
                         impactViewport.x >= 0f && impactViewport.x <= 1f &&
@@ -582,7 +589,7 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                         continue;
 
                     impact.Point = ConvertViewportToLocal(
-                        preview.Image,
+                        modelPreview.Image,
                         impactViewport);
                     impact.Dot.anchoredPosition = impact.Point;
                 }
@@ -590,12 +597,12 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
             }
 
             UpdateLabelLane(
-                preview.VisibleLeftMarkers,
+                modelPreview.VisibleLeftMarkers,
                 bounds,
                 true);
 
             UpdateLabelLane(
-                preview.VisibleRightMarkers,
+                modelPreview.VisibleRightMarkers,
                 bounds,
                 false);
         }
@@ -705,7 +712,7 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                 if (!marker.HasLoggedLabelPosition)
                 {
                     marker.HasLoggedLabelPosition = true;
-                    Plugin.Log?.LogInfo(
+                    TraumaLog.Info(
                         $"[DeathScreenHitMarkers] {marker.BodyPart} label: " +
                         $"position=({x:F1}, {marker.LabelYPixels:F1}), " +
                         $"verticalBounds=({minY:F1}, {maxY:F1})");

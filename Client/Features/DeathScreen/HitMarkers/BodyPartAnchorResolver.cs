@@ -100,10 +100,10 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
             foreach (EBodyPart bodyPart in NamesByBodyPart.Keys)
             {
                 if (anchorsByBodyPart.TryGetValue(bodyPart, out Transform anchor))
-                    Plugin.Log?.LogInfo(
+                    TraumaLog.Info(
                         $"[DeathScreenHitMarkers] Resolved {bodyPart} anchor: {anchor.name}");
                 else
-                    Plugin.Log?.LogWarning(
+                    TraumaLog.Warning(
                         $"[DeathScreenHitMarkers] Missing {bodyPart} anchor");
             }
 
@@ -120,7 +120,7 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                 .Select(transform => transform.name)
                 .Distinct()
                 .Take(40));
-            Plugin.Log?.LogWarning(
+            TraumaLog.Warning(
                 $"[DeathScreenHitMarkers] Leg-like hierarchy names: {candidates}");
         }
 

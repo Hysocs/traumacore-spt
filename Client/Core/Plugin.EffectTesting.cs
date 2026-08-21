@@ -80,7 +80,7 @@ namespace TraumaCore
                     bodyPart);
             if (bodyPartAnchor == null)
             {
-                Log?.LogWarning(
+                TraumaLog.Warning(
                     $"[EffectTest] Cannot inflict {bodyPart} hit: bone anchor missing");
                 return;
             }
@@ -115,7 +115,7 @@ namespace TraumaCore
             HitPressureApplication application = HitPressureResponse.Apply(
                 player.ActiveHealthController,
                 EBodyPart.Chest);
-            Log?.LogInfo(
+            TraumaLog.Info(
                 $"[EffectTest] Hit pressure strength={application.Strength:P0}, " +
                 $"healthEffect={(application.IsHealthEffectApplied ? "applied" : "failed")}");
         }
@@ -159,7 +159,7 @@ namespace TraumaCore
             if (trauma == null) trauma = _localPlayer.gameObject.AddComponent<TraumaController>();
             trauma.InitializeForPlayer(_localPlayer);
             action(trauma, _localPlayer);
-            Logger.LogInfo("[EffectTest] " + name + " applied to local player");
+            TraumaLog.Info("[EffectTest] " + name + " applied to local player");
         }
     }
 }

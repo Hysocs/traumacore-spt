@@ -213,7 +213,7 @@ namespace TraumaCore
             if (!AddWound(_chestWounds, EBodyPart.Chest, originalBulletDamage,
                 OrganSystem.NormalBleedDivisor.Value)) return;
             if (OrganSystem.DebugLogging.Value)
-                Plugin.Log.LogInfo(string.Format(
+                TraumaLog.Info(string.Format(
                     "[Trauma] Chest wound #{0}: interval={1:0.0}ms, added={2:0.00} HP/s, total={3:0.00} HP/s",
                     _chestWounds.Count, _chestWounds.LastInterval * 1000f,
                     _chestWounds.LastSeverity, _chestWounds.Effective));
@@ -229,7 +229,7 @@ namespace TraumaCore
                 _heartWoundUiEffect = _health.AddEffect<HeartWoundHealthEffect>(
                     EBodyPart.Chest, 0f, null, null, null);
             if (OrganSystem.DebugLogging.Value)
-                Plugin.Log.LogInfo(string.Format(
+                TraumaLog.Info(string.Format(
                     "[Trauma] Heart wound #{0}: interval={1:0.0}ms, added={2:0.00} HP/s, total={3:0.00} HP/s",
                     _heartWounds.Count, _heartWounds.LastInterval * 1000f,
                     _heartWounds.LastSeverity, _heartWounds.Effective));
@@ -278,7 +278,7 @@ namespace TraumaCore
             AddDebugBloodSource(severity, false,
                 bodyPart == EBodyPart.Head, bodyPart);
             if (OrganSystem.DebugLogging.Value)
-                Plugin.Log.LogInfo(string.Format(
+                TraumaLog.Info(string.Format(
                     "[BloodFX] Corpse wound on {0}: strength={1:0.00}, reserve={2:0.0}",
                     bodyPart, severity, _corpseBloodReserve));
         }
@@ -297,7 +297,7 @@ namespace TraumaCore
             AddWound(track, bodyPart, originalBulletDamage,
                 OrganSystem.NormalBleedDivisor.Value, bodyScale);
             if (OrganSystem.DebugLogging.Value)
-                Plugin.Log.LogInfo(string.Format(
+                TraumaLog.Info(string.Format(
                     "[Trauma] {0} wound #{1}: effective={2:0.00} scale={3:0.00}",
                     bodyPart, track.Count, track.Effective, bodyScale));
         }
@@ -381,7 +381,7 @@ namespace TraumaCore
                 }
             }
             if (OrganSystem.DebugLogging.Value)
-                Plugin.Log.LogInfo(string.Format("[Bruised] +{0:0.00}, strength={1:0.00}, duration={2:0.0}s",
+                TraumaLog.Info(string.Format("[Bruised] +{0:0.00}, strength={1:0.00}, duration={2:0.0}s",
                     stoppedBulletDamage / 100f, _bruiseStrength, BruiseDuration));
         }
 
@@ -659,7 +659,7 @@ namespace TraumaCore
             _corpseBloodReserve = GetRemainingBodyHealth();
             _corpseBloodInitialized = true;
             if (OrganSystem.DebugLogging.Value)
-                Plugin.Log.LogInfo(string.Format(
+                TraumaLog.Info(string.Format(
                     "[BloodFX] Corpse blood reserve={0:0.0} HP; duration will follow wound DPS",
                     _corpseBloodReserve));
         }
@@ -957,7 +957,7 @@ namespace TraumaCore
             _bloodVisualHitCounts.Remove((int)bodyPart << 1);
 
             if (OrganSystem.DebugLogging.Value)
-                Plugin.Log.LogInfo($"[Trauma] Healed all treatable bleed stacks on {bodyPart}");
+                TraumaLog.Info($"[Trauma] Healed all treatable bleed stacks on {bodyPart}");
         }
 
         private void ClearLinkedTreatableBleeds()
@@ -986,7 +986,7 @@ namespace TraumaCore
 
             if (_heartWounds.Active) EnsureMarkers();
             if (OrganSystem.DebugLogging.Value)
-                Plugin.Log.LogInfo(_heartWounds.Active
+                TraumaLog.Info(_heartWounds.Active
                     ? "[Trauma] All treatable linked bleeds healed; permanent heart hemorrhage continues"
                     : "[Trauma] All linked bleed wounds healed");
         }

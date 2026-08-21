@@ -22,7 +22,7 @@ namespace TraumaCore.Patches.HitPressure
                     as List<EffectsController.EffectAccumulator>;
             if (effectAccumulators == null)
             {
-                Plugin.Log.LogError(
+                TraumaLog.Error(
                     "[HitPressure] EFT effect accumulators were not found");
                 return;
             }
@@ -44,12 +44,12 @@ namespace TraumaCore.Patches.HitPressure
                     accumulator.ValidTypes = acceptedEffectTypes;
                 }
 
-                Plugin.Log.LogInfo(
+                TraumaLog.Info(
                     "[HitPressure] Registered with EFT tunnel-vision renderer");
                 return;
             }
 
-            Plugin.Log.LogError(
+            TraumaLog.Error(
                 "[HitPressure] EFT tunnel-vision renderer was not found");
         }
     }

@@ -44,7 +44,7 @@ namespace TraumaCore.Patches.HealthEffects
                     if (effects.Remove(LegacyEffectNames[i])) removed++;
             }
             if (removed > 0 && logRemoval)
-                Plugin.Log.LogWarning("Removed " + removed +
+                TraumaLog.Warning("Removed " + removed +
                     " legacy persistent TraumaCore health effect(s) from profile health.");
             return removed;
         }

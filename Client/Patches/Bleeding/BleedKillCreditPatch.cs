@@ -80,7 +80,7 @@ namespace TraumaCore.Patches.Bleeding
             }
             catch (Exception exception)
             {
-                Plugin.Log.LogError(
+                TraumaLog.Error(
                     $"[BleedKillCreditPatch] Error: {exception}");
                 return true;
             }

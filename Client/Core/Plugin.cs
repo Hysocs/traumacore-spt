@@ -83,7 +83,7 @@ namespace TraumaCore
             _patchManager = new PatchManager(this, autoPatch: true);
             _patchManager.EnablePatches();
             Canvas.preWillRenderCanvases += RenderFrame;
-            Logger.LogInfo(Name + " " + Version + " loaded");
+            TraumaLog.Info(Name + " " + Version + " loaded");
         }
 
         private async void Start()
@@ -97,7 +97,7 @@ namespace TraumaCore
             }
             catch (Exception exception)
             {
-                Logger.LogError(exception);
+                TraumaLog.Error(exception);
             }
         }
 
@@ -615,7 +615,7 @@ namespace TraumaCore
             if (_nativeBloodTexture != null && !_loggedBloodTexture)
             {
                 _loggedBloodTexture = true;
-                Log.LogInfo("[BloodFX] Using native EFT blood texture: " +
+                TraumaLog.Info("[BloodFX] Using native EFT blood texture: " +
                     _nativeBloodTexture.name);
             }
         }
@@ -674,7 +674,7 @@ namespace TraumaCore
             ForceMaterialTintOpaque(_bloodParticleMaterial, "_BaseColor");
             _usingNativeParticleMaterial = true;
             _loggedBloodTexture = true;
-            Log.LogInfo("[BloodFX] Cloned EFT body-impact particle material: " +
+            TraumaLog.Info("[BloodFX] Cloned EFT body-impact particle material: " +
                 fallbackRenderer.sharedMaterial.name + " shader=" +
                 fallbackRenderer.sharedMaterial.shader.name);
             return true;
@@ -755,7 +755,7 @@ namespace TraumaCore
             }
             catch (Exception e)
             {
-                Log.LogWarning("[BloodFX] Could not convert EFT decal mask: " + e.Message);
+                TraumaLog.Warning("[BloodFX] Could not convert EFT decal mask: " + e.Message);
                 return null;
             }
             finally

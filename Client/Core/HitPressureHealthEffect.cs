@@ -81,7 +81,7 @@ namespace TraumaCore
             }
             catch (Exception exception)
             {
-                Plugin.Log.LogError(
+                TraumaLog.Error(
                     $"[HitPressure] Failed to apply health effect to {bodyPart}: " +
                     exception);
                 return false;
@@ -102,7 +102,7 @@ namespace TraumaCore
             }
             catch (Exception exception)
             {
-                Plugin.Log.LogWarning(
+                TraumaLog.Warning(
                     "[HitPressure] Could not register the health-effect icon: " +
                     exception.Message);
             }

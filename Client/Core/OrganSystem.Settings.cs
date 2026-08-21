@@ -62,7 +62,8 @@ namespace TraumaCore
                 Ui("Maximum debug ESP rendering distance in metres", "07 - Debug & Visuals",
                     "ESP Culling Range", 80, new AcceptableValueRange<float>(5f, 500f)));
             DebugLogging = config.Bind("Debug", "HitLogging", true,
-                Ui("Log chest and organ hits", "07 - Debug & Visuals", "Hit Logging", 70));
+                Ui("Write TraumaCore diagnostic, warning, and error messages to the log",
+                    "07 - Debug & Visuals", "Logging", 70));
         }
 
         private static void BindTargetRules(ConfigFile config)
