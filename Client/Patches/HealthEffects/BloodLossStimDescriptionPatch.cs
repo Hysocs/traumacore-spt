@@ -1,4 +1,5 @@
 using System.Reflection;
+using EFT;
 using EFT.HealthSystem;
 using EFT.InventoryLogic;
 using HarmonyLib;
@@ -6,6 +7,32 @@ using SPT.Reflection.Patching;
 
 namespace TraumaCore.Patches.HealthEffects
 {
+    public sealed class BloodLossStimTreatmentPatch : ModulePatch
+    {
+        protected override MethodBase GetTargetMethod() =>
+            AccessTools.Method(typeof(ActiveHealthController.Stimulator),
+                nameof(ActiveHealthController.Stimulator.ActivateBuff));
+
+        [PatchPostfix]
+        private static void ApplyTraumaTreatment(
+            ActiveHealthController.Stimulator __instance,
+            object __0,
+            bool __1)
+        {
+            if (!__1 || !(__0 is IStimulatorBuff buff) ||
+                buff.Settings == null ||
+                buff.Settings.BuffType !=
+                    EStimulatorBuffType.RemoveAllBloodLosses)
+                return;
+
+            Player player = __instance?.HealthController?.Player;
+            TraumaController trauma = player != null
+                ? player.GetComponent<TraumaController>()
+                : null;
+            trauma?.ApplyBloodLossStimTreatment();
+        }
+    }
+
     public sealed class BloodLossStimDescriptionPatch : ModulePatch
     {
         protected override MethodBase GetTargetMethod() =>
@@ -20,7 +47,7 @@ namespace TraumaCore.Patches.HealthEffects
             if (buffSettings != null &&
                 buffSettings.BuffType == EStimulatorBuffType.RemoveAllBloodLosses)
             {
-                __result = "Removes all treatable bleeding upon use. Reduces treatable bleed damage by 50% for the remaining duration. Does not affect heart hemorrhage.";
+                __result = "Advances active non-heart bleeds 90% toward clotting and halves all non-heart bleed damage while the stim is active, including new wounds. Does not affect heart hemorrhage.";
             }
         }
     }
@@ -38,7 +65,7 @@ namespace TraumaCore.Patches.HealthEffects
             if (buff != null && buff.Settings != null &&
                 buff.Settings.BuffType == EStimulatorBuffType.RemoveAllBloodLosses)
             {
-                __instance.Text = "Clears existing non-heart bleeding on use. Reduces non-heart bleed damage by 50% for the remaining duration.";
+                __instance.Text = "Advances active non-heart bleeds 90% toward clotting and halves non-heart bleed damage for the stim's duration, including new wounds.";
             }
         }
     }
@@ -80,7 +107,7 @@ namespace TraumaCore.Patches.HealthEffects
             blocker.Name = "NON-HEART BLEED PROTECTION";
             blocker.DisplayNameFunc = () => "Non-heart bleed protection";
             blocker.FullStringValue = () =>
-                "Clears existing non-heart bleeding on use and reduces non-heart bleed damage by 50% for the remaining duration.";
+                "Advances active non-heart bleeds 90% toward clotting and halves non-heart bleed damage for the stim's duration, including new wounds.";
         }
     }
 }

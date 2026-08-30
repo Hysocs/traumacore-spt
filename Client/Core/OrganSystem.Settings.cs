@@ -9,7 +9,8 @@ namespace TraumaCore
         internal static ConfigEntry<bool> Enabled, DebugEsp, DebugLogging,
             ForceFragmentation, BloodEffects;
         internal static ConfigEntry<float> DebugEspRange, DirectDamagePercent,
-            FullWoundTotalDamageMultiplier, NonHeartDecayDuration;
+            FullWoundTotalDamageMultiplier, NonHeartDecayDuration,
+            LightBleedDamageMultiplier, HeavyBleedDamageMultiplier;
         internal static ConfigEntry<float> BoneEspOpacity, HeartEspOpacity,
             BrainEspOpacity, RibcageEspOpacity;
         private static ConfigEntry<float> RibcageMinimumDepthSetting,
@@ -30,7 +31,6 @@ namespace TraumaCore
         internal const float LightBleedDamagePerSecond = 1f;
         internal const float HeartBaseBleedDamagePerSecond = 10f;
         internal const float HeavyBloodEffectStrength = 6f;
-        internal const float BloodLossBlockerDamageMultiplier = 0.50f;
         internal static OrganDefinition Heart { get; private set; }
         internal static OrganDefinition Brain { get; private set; }
         internal static OrganDefinition LowerBrain { get; private set; }
@@ -170,6 +170,16 @@ namespace TraumaCore
                 Ui("Seconds after the last non-heart hit until the bleed clots completely",
                     "05 - Bleed Balance", "Non-Heart Clot Time", 70,
                     new AcceptableValueRange<float>(3f, 120f)));
+            LightBleedDamageMultiplier = config.Bind("Bleeding",
+                "LightBleedDamageMultiplier", 1f,
+                Ui("Multiplier applied to all light-bleed damage",
+                    "05 - Bleed Balance", "Light Bleed Damage Multiplier", 60,
+                    new AcceptableValueRange<float>(0f, 2f)));
+            HeavyBleedDamageMultiplier = config.Bind("Bleeding",
+                "HeavyBleedDamageMultiplier", 1f,
+                Ui("Multiplier applied to all heavy-bleed damage, including heart hemorrhage",
+                    "05 - Bleed Balance", "Heavy Bleed Damage Multiplier", 50,
+                    new AcceptableValueRange<float>(0f, 2f)));
         }
 
         private static ConfigEntry<float> BindEspOpacity(ConfigFile config,

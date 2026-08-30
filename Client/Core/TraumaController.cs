@@ -13,6 +13,9 @@ namespace TraumaCore
     internal sealed class TraumaController : MonoBehaviour
     {
         private const float ReferencePostArmorDamage = 50f;
+        private const int LightWoundsForHeavyBleed = 3;
+        private const float BloodLossStimClottingProgress = 0.90f;
+        private const float BloodLossStimBleedMultiplier = 0.50f;
 
         private sealed class WoundTrack
         {
@@ -68,7 +71,19 @@ namespace TraumaCore
                     Duration = duration,
                     Type = type
                 });
+                PromoteStackedLightWounds();
                 return severity;
+            }
+
+            private void PromoteStackedLightWounds()
+            {
+                if (CountType(BleedType.Light) < LightWoundsForHeavyBleed)
+                    return;
+
+                // Reclassifying in place preserves every wound's current clot timer.
+                for (int i = 0; i < _wounds.Count; i++)
+                    if (_wounds[i].Type == BleedType.Light)
+                        _wounds[i].Type = BleedType.Heavy;
             }
 
             internal void Clear()
@@ -99,7 +114,8 @@ namespace TraumaCore
                     if (type.HasValue && _wounds[i].Type != type.Value) continue;
                     damagePerSecond += _wounds[i].Severity *
                         GetDecayStrength(_wounds[i].Created,
-                            _wounds[i].Duration);
+                            _wounds[i].Duration) *
+                        GetBleedDamageMultiplier(_wounds[i].Type);
                 }
                 return damagePerSecond;
             }
@@ -108,8 +124,16 @@ namespace TraumaCore
             {
                 float damagePerSecond = 0f;
                 for (int i = 0; i < _wounds.Count; i++)
-                    damagePerSecond += _wounds[i].Severity;
+                    damagePerSecond += _wounds[i].Severity *
+                        GetBleedDamageMultiplier(_wounds[i].Type);
                 return damagePerSecond;
+            }
+
+            private static float GetBleedDamageMultiplier(BleedType type)
+            {
+                return type == BleedType.Heavy
+                    ? OrganSystem.HeavyBleedDamageMultiplier.Value
+                    : OrganSystem.LightBleedDamageMultiplier.Value;
             }
 
             internal int CountType(BleedType type)
@@ -229,7 +253,6 @@ namespace TraumaCore
         private readonly WoundTrack _faceWounds = new WoundTrack();
         private bool _subscribed;
         private bool _addingMarker;
-        private bool _bloodLossBlockerWasActive;
         private float _bruiseStrength;
         private float _currentBruiseStrength;
         private float _bruiseExpires;
@@ -256,6 +279,8 @@ namespace TraumaCore
             new Dictionary<EBodyPart, WoundTrack>();
         private readonly HashSet<IHealthEffect> _acceleratedBleedEffects =
             new HashSet<IHealthEffect>();
+        private readonly List<IHealthEffect> _pendingBleedTreatments =
+            new List<IHealthEffect>();
 
         internal int HeartWoundCount { get { return _heartWounds.Count; } }
         internal float HeartBleedDamagePerSecond
@@ -491,7 +516,7 @@ namespace TraumaCore
         private float GetTreatableBleedMultiplier()
         {
             return _health != null && _health.HasBloodLossBlockers()
-                ? OrganSystem.BloodLossBlockerDamageMultiplier
+                ? BloodLossStimBleedMultiplier
                 : 1f;
         }
 
@@ -637,10 +662,7 @@ namespace TraumaCore
                 DisableWhenIdle();
                 return;
             }
-            bool bloodLossBlockerActive = _health.HasBloodLossBlockers();
-            if (bloodLossBlockerActive && !_bloodLossBlockerWasActive)
-                ClearLinkedTreatableBleeds();
-            _bloodLossBlockerWasActive = bloodLossBlockerActive;
+            ApplyPendingBleedTreatments();
             if (!_chestWounds.Active && !_heartWounds.Active && !_faceWounds.Active &&
                 _bodyWounds.Count == 0)
             {
@@ -789,7 +811,6 @@ namespace TraumaCore
             if (!alive && _corpseBloodReserve <= 0f)
                 return;
 
-            float blockerMultiplier = GetTreatableBleedMultiplier();
             float totalSourceDps = 0f;
             for (int i = _bloodSources.Count - 1; i >= 0; i--)
             {
@@ -811,8 +832,7 @@ namespace TraumaCore
                     }
                 }
                 float decay = source.Heart ? 1f : GetDecayStrength(source.Created);
-                float dps = source.Strength * decay * corpseDecay *
-                    (source.Heart ? 1f : blockerMultiplier);
+                float dps = source.Strength * decay * corpseDecay;
                 totalSourceDps += dps;
                 float rate = Mathf.Clamp(dps * 0.55f, 0.5f, 24f);
                 source.EmissionAccumulator += rate * dt;
@@ -1202,20 +1222,36 @@ namespace TraumaCore
         {
             if (_addingMarker || effect == null) return;
             if (effect is ILightBleeding || effect is IHeavyBleeding)
-                AccelerateTreatableBleed(effect);
+                QueueBleedTreatment(effect);
         }
 
         private void OnEffectResidual(IHealthEffect effect)
         {
             if (_addingMarker || effect == null) return;
             if (effect is ILightBleeding || effect is IHeavyBleeding)
-                AccelerateTreatableBleed(effect);
+                QueueBleedTreatment(effect);
+        }
+
+        private void QueueBleedTreatment(IHealthEffect removedEffect)
+        {
+            if (removedEffect == null ||
+                !_acceleratedBleedEffects.Add(removedEffect))
+                return;
+            _pendingBleedTreatments.Add(removedEffect);
+            enabled = true;
+        }
+
+        private void ApplyPendingBleedTreatments()
+        {
+            for (int i = 0; i < _pendingBleedTreatments.Count; i++)
+                AccelerateTreatableBleed(_pendingBleedTreatments[i]);
+            _pendingBleedTreatments.Clear();
+            _acceleratedBleedEffects.Clear();
         }
 
         private void AccelerateTreatableBleed(IHealthEffect removedEffect)
         {
-            if (_health == null || _addingMarker || removedEffect == null ||
-                !_acceleratedBleedEffects.Add(removedEffect)) return;
+            if (_health == null || _addingMarker || removedEffect == null) return;
 
             EBodyPart bodyPart = removedEffect.BodyPart;
 
@@ -1254,6 +1290,34 @@ namespace TraumaCore
                 TraumaLog.Info(string.Format(
                     "[Trauma] Treatment advanced clotting on {0} by {1:0}%",
                     bodyPart, clottingProgress * 100f));
+        }
+
+        internal void ApplyBloodLossStimTreatment()
+        {
+            if (_health == null || !_health.IsAlive)
+                return;
+
+            // EFT removes every native bleed marker during this buff's
+            // activation. Discard those queued marker events so the same stim
+            // cannot also receive ordinary item treatment on the next update.
+            _pendingBleedTreatments.Clear();
+            _acceleratedBleedEffects.Clear();
+            _chestWounds.AdvanceClotting(BloodLossStimClottingProgress);
+            _faceWounds.AdvanceClotting(BloodLossStimClottingProgress);
+            foreach (KeyValuePair<EBodyPart, WoundTrack> bodyWounds
+                in _bodyWounds)
+            {
+                bodyWounds.Value.AdvanceClotting(
+                    BloodLossStimClottingProgress);
+            }
+            EnsureMarkers();
+
+            if (OrganSystem.DebugLogging.Value)
+            {
+                TraumaLog.Info(
+                    "[Trauma] Blood-loss stim advanced active non-heart " +
+                    "wounds 90% toward clotting and enabled its 50% bleed-rate reduction");
+            }
         }
 
         private void ExpireClottedBleeds()
@@ -1310,32 +1374,6 @@ namespace TraumaCore
                 TraumaLog.Info($"[Trauma] Treatable bleed clotted on {bodyPart}");
         }
 
-        private void ClearLinkedTreatableBleeds()
-        {
-            if (_health == null || _addingMarker) return;
-            _addingMarker = true;
-            try
-            {
-                _chestWounds.Clear();
-                _faceWounds.Clear();
-                _bodyWounds.Clear();
-                for (int i = _bloodSources.Count - 1; i >= 0; i--)
-                    if (!_bloodSources[i].Heart) _bloodSources.RemoveAt(i);
-                List<IHealthEffect> effects = new List<IHealthEffect>(_health.GetAllActiveEffects());
-                for (int i = 0; i < effects.Count; i++)
-                    if ((effects[i] is ILightBleeding || effects[i] is IHeavyBleeding) &&
-                        effects[i] is ActiveHealthController.Effect activeEffect)
-                        activeEffect.ForceRemove();
-            }
-            finally { _addingMarker = false; }
-
-            if (_heartWounds.Active) EnsureMarkers();
-            if (OrganSystem.DebugLogging.Value)
-                TraumaLog.Info(_heartWounds.Active
-                    ? "[Trauma] All treatable linked bleeds healed; permanent heart hemorrhage continues"
-                    : "[Trauma] All linked bleed wounds healed");
-        }
-
         private void Unsubscribe()
         {
             if (_subscribed && _health != null)
@@ -1344,8 +1382,8 @@ namespace TraumaCore
                 _health.EffectResidualEvent -= OnEffectResidual;
             }
             _subscribed = false;
-            _bloodLossBlockerWasActive = false;
             _acceleratedBleedEffects.Clear();
+            _pendingBleedTreatments.Clear();
         }
 
         private void OnDestroy()
