@@ -71,7 +71,7 @@ namespace TraumaCore
             ForceFragmentation = config.Bind("Debug", "ForceFragmentation", false,
                 Ui("Force every eligible bullet wound to fragment for testing",
                     "09 - Debugging", "Force Fragmentation (100%)", 100));
-            DebugEsp = config.Bind("Debug", "OrganESP", true,
+            DebugEsp = config.Bind("Debug", "OrganESP", false,
                 Ui("Render debug organ outlines", "09 - Debugging",
                     "Organ Hitbox ESP", 90));
             DebugEspRange = config.Bind("Debug", "OrganESPRange", 100f,
