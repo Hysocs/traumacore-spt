@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using BepInEx;
+using BepInEx.Configuration;
 using BepInEx.Logging;
 using Comfort.Common;
-using TraumaCore.Patches.Armor;
 using EFT;
 using EFT.HealthSystem;
 using SPT.Reflection.Patching;
@@ -20,17 +20,22 @@ namespace TraumaCore
     {
         public const string Guid = "com.hysocs.traumacore";
         public const string Name = "TraumaCore";
-        public const string Version = "1.4.0";
+        public const string Version = "1.5.0";
 
         internal static ManualLogSource Log { get; private set; }
+        internal static ConfigEntry<bool> EnableWoundInspection { get; private set; }
+        internal static ConfigEntry<bool> EnableCorpseDragging { get; private set; }
+        internal static ConfigEntry<bool> EnableCustomFragmentation { get; private set; }
+        internal static ConfigEntry<bool> EnableHitPressure { get; private set; }
+        internal static ConfigEntry<bool> EnableDeathScreenReport { get; private set; }
+        internal static ConfigEntry<bool> EnablePersistentBloodDecals { get; private set; }
+        internal static ConfigEntry<bool> EnableTraumaPresentation { get; private set; }
 
         private readonly List<LineCommand> _lines = new List<LineCommand>(2048);
         private readonly List<BloodQuadCommand> _bloodQuads = new List<BloodQuadCommand>(512);
         private readonly List<WorldBloodCommand> _worldBlood = new List<WorldBloodCommand>(512);
         private readonly List<TraumaController.DebugBloodParticle> _particleBlood =
             new List<TraumaController.DebugBloodParticle>(1024);
-        private readonly List<CustomArmorPenetrationPatch.DebugWeakSpot> _armorWeakSpots =
-            new List<CustomArmorPenetrationPatch.DebugWeakSpot>(32);
         private readonly List<Text> _debugLabels = new List<Text>(32);
         private readonly StringBuilder _debugText = new StringBuilder(256);
         private readonly Vector2[] _boxPoints = new Vector2[8];
@@ -77,7 +82,8 @@ namespace TraumaCore
         private void Awake()
         {
             Log = Logger;
-            CustomHealthEffectRegistry.Register();
+            BindDefaultPreset();
+            BindFeatureToggles();
             OrganSystem.InitializeOrganSettings(Config);
             BindEffectTestButtons();
             _patchManager = new PatchManager(this, autoPatch: true);
@@ -86,14 +92,109 @@ namespace TraumaCore
             TraumaLog.Info(Name + " " + Version + " loaded");
         }
 
+        private void BindDefaultPreset()
+        {
+            ConfigurationManagerAttributes attributes =
+                new ConfigurationManagerAttributes
+                {
+                    Category = "00 - Default Preset",
+                    DispName = "Restore Recommended Defaults",
+                    Order = 1000,
+                    HideDefaultButton = true,
+                    HideSettingName = true,
+                    CustomDrawer = ignored => DrawDefaultPresetButton()
+                };
+            Config.Bind("Default Preset", "Restore Recommended Defaults", false,
+                new ConfigDescription(
+                    "Restore every active TraumaCore setting to the curated code defaults.",
+                    null, attributes));
+        }
+
+        private void DrawDefaultPresetButton()
+        {
+            if (GUILayout.Button("Restore Recommended Defaults",
+                GUILayout.ExpandWidth(true)))
+                RestoreRecommendedDefaults();
+        }
+
+        private void RestoreRecommendedDefaults()
+        {
+            bool previousSaveOnSet = Config.SaveOnConfigSet;
+            Config.SaveOnConfigSet = false;
+            int restoredSettingCount = 0;
+            try
+            {
+                foreach (KeyValuePair<ConfigDefinition, ConfigEntryBase> setting
+                    in Config)
+                {
+                    ConfigEntryBase entry = setting.Value;
+                    if (entry == null || Equals(entry.BoxedValue,
+                        entry.DefaultValue))
+                        continue;
+                    entry.BoxedValue = entry.DefaultValue;
+                    restoredSettingCount++;
+                }
+                Config.Save();
+            }
+            finally
+            {
+                Config.SaveOnConfigSet = previousSaveOnSet;
+            }
+            TraumaLog.Info($"[DefaultPreset] Restored {restoredSettingCount} " +
+                "TraumaCore settings to recommended defaults");
+        }
+
+        private void BindFeatureToggles()
+        {
+            EnableCustomFragmentation = BindFeatureToggle(
+                "CustomFragmentation", true, "Custom Fragmentation", 90,
+                "Replace EFT bullet fragmentation with TraumaCore wound paths.");
+            EnableHitPressure = BindFeatureToggle(
+                "HitPressure", true, "Impact Shock / Hit Pressure", 80,
+                "Apply TraumaCore impact-shock health and camera effects.");
+            EnableDeathScreenReport = BindFeatureToggle(
+                "DeathScreenReport", true, "Death-Screen Wound Report", 70,
+                "Track and display bullet wounds and bleeding on the death screen.");
+            EnableWoundInspection = Config.Bind(
+                "Wound Inspection", "Enable Corpse Wound Inspection", true,
+                new ConfigDescription(
+                    "Add INSPECT WOUNDS to valid corpse interaction choices.",
+                    null, new ConfigurationManagerAttributes
+                    {
+                        Category = "01 - Feature Toggles",
+                        DispName = "Corpse Wound Inspection",
+                        Order = 60
+                    }));
+            EnableCorpseDragging = BindFeatureToggle(
+                "CorpseDragging", true, "Corpse Dragging", 50,
+                "Add DRAG BODY to valid corpse interaction choices.");
+            EnablePersistentBloodDecals = BindFeatureToggle(
+                "PersistentBloodDecals", true, "Expanded Blood Decals", 40,
+                "Increase EFT's persistent blood-decal capacity.");
+            EnableTraumaPresentation = BindFeatureToggle(
+                "TraumaPresentation", true, "Trauma Audio / Screen Effects", 30,
+                "Control repeated trauma audio, screen blood, and death voices.");
+        }
+
+        private ConfigEntry<bool> BindFeatureToggle(string key,
+            bool defaultValue, string displayName, int order,
+            string description)
+        {
+            return Config.Bind("Feature Toggles", key, defaultValue,
+                new ConfigDescription(description, null,
+                    new ConfigurationManagerAttributes
+                    {
+                        Category = "01 - Feature Toggles",
+                        DispName = displayName,
+                        Order = order
+                    }));
+        }
+
         private async void Start()
         {
             try
             {
                 await EFTHardSettings.Load();
-                BruisedHealthEffect.EnsureIconRegistered();
-                HitPressureHealthEffect.EnsureIconRegistered();
-                HeartWoundHealthEffect.EnsureIconRegistered();
             }
             catch (Exception exception)
             {
@@ -260,20 +361,30 @@ namespace TraumaCore
                         {
                             AddOrganShape(player, OrganSystem.Brain, out labelPosition);
                             AddOrganShape(player, OrganSystem.LowerBrain, out labelPosition);
+                            AddInsetBodyPartMesh(player, EBodyPart.Head,
+                                OrganSystem.SkullMinimumDepth,
+                                new Color(0.82f, 0.88f, 1f,
+                                    OrganSystem.BoneEspOpacity.Value));
                         }
                         if (rules.CervicalSpineEnabled) AddUpperSpine(player);
                         if (rules.ThoracicSpineEnabled) AddThoracicSpine(player);
+                        AddChestColliderVolume(player);
                         AddLimbBones(player);
-                        AddImpactDebug(trauma);
+                        AddImpactGeometry(trauma);
                     }
-                    if (rules.ArmorPenetrationEnabled) AddArmorWeakSpotDebug(player);
                 }
             }
 
             Player displayed = debugEsp && IsValidDebugTarget(_lastHitTarget, rangeSq, localPosition)
                 ? _lastHitTarget : (debugEsp ? nearest : null);
-            if (displayed != null && UpdatePlayerDebugPanel(0, displayed,
-                displayed.GetComponent<TraumaController>())) labelCount = 1;
+            TraumaController displayedTrauma = displayed != null
+                ? displayed.GetComponent<TraumaController>() : null;
+            if (displayed != null && UpdatePlayerDebugPanel(labelCount, displayed,
+                displayedTrauma))
+            {
+                labelCount++;
+                AddImpactDebugPanels(displayedTrauma, ref labelCount);
+            }
 
             HideLabelsFrom(labelCount);
 
@@ -297,6 +408,7 @@ namespace TraumaCore
             Transform anchor = organ.GetAnchor(player);
             if (anchor == null) return false;
             Quaternion rotation = organ.WorldRotation(player);
+            Color organColor = GetOrganEspColor(organ);
             Vector3 axisRight = rotation * Vector3.right;
             Vector3 axisUp = rotation * Vector3.up;
             Vector3 axisForward = rotation * Vector3.forward;
@@ -316,7 +428,7 @@ namespace TraumaCore
 
             for (int i = 0; i < BoxEdgeStart.Length; i++)
                 _lines.Add(new LineCommand(_boxPoints[BoxEdgeStart[i]],
-                    _boxPoints[BoxEdgeEnd[i]], organ.Color, 2f));
+                    _boxPoints[BoxEdgeEnd[i]], organColor, 2f));
             labelPosition = new Vector2((_boxPoints[2].x + _boxPoints[3].x +
                 _boxPoints[6].x + _boxPoints[7].x) * 0.25f, top);
             return true;
@@ -331,6 +443,7 @@ namespace TraumaCore
             Vector3 center = organ.WorldCenter(player);
             Vector3 e = organ.HalfExtents;
             Quaternion rotation = organ.WorldRotation(player);
+            Color organColor = GetOrganEspColor(organ);
             float top = float.MinValue;
             float sumX = 0f;
             int projectedCount = 0;
@@ -349,7 +462,8 @@ namespace TraumaCore
                     Vector2 point;
                     if (screen.z <= 0f || !TryScreenPointToCanvas(screen, out point)) return false;
                     if (i == 0) first = point;
-                    else _lines.Add(new LineCommand(previous, point, organ.Color, 2f));
+                    else _lines.Add(new LineCommand(previous, point,
+                        organColor, 2f));
                     previous = point;
                     if (ring == 0 && i < EllipsoidSegments)
                     {
@@ -361,7 +475,7 @@ namespace TraumaCore
             return true;
         }
 
-        private void AddImpactDebug(TraumaController trauma)
+        private void AddImpactGeometry(TraumaController trauma)
         {
             if (trauma == null) return;
             IList<TraumaController.DebugImpact> impacts = trauma.DebugImpacts;
@@ -375,9 +489,46 @@ namespace TraumaCore
                     impact.ThoracicSpine ? thoracic :
                     impact.Brain ? Color.magenta :
                     impact.Heart ? Color.green : new Color(1f, 0.35f, 0.08f, 1f);
-                AddWorldLine(impact.HitPoint - impact.Direction * 0.45f,
-                    impact.HitPoint + impact.Direction * 0.55f, color, 2.5f);
                 AddWorldMarker(impact.HitPoint, Color.white, 0.018f);
+                if (!impact.ArmorStopped && impact.ReferenceThickness > 0.001f)
+                {
+                    Color referenceColor = new Color(0.1f, 0.65f, 1f, 1f);
+                    AddWorldLine(impact.ReferenceEntryPoint,
+                        impact.ReferenceExitPoint, referenceColor, 4f);
+                    AddWorldMarker(impact.ReferenceEntryPoint,
+                        referenceColor, 0.025f);
+                    AddWorldMarker(impact.ReferenceExitPoint,
+                        referenceColor, 0.025f);
+                }
+                if (!impact.ArmorStopped && impact.Trajectory.HasPath)
+                {
+                    const float approachDistance = 0.28f;
+                    AddWorldLine(
+                        impact.Trajectory.EntryPoint -
+                            impact.Trajectory.EntryDirection * approachDistance,
+                        impact.Trajectory.EntryPoint, color, 2.5f);
+                    Color woundColor = impact.BleedType == BleedType.Heavy
+                        ? new Color(1f, 0.03f, 0.03f, 1f)
+                        : new Color(1f, 0.9f, 0.2f, 1f);
+                    for (int segmentIndex = 0;
+                        segmentIndex < impact.Trajectory.Segments.Length;
+                        segmentIndex++)
+                    {
+                        WoundPathSegment segment =
+                            impact.Trajectory.Segments[segmentIndex];
+                        AddWorldLine(segment.StartPoint, segment.EndPoint,
+                            woundColor, segment.IsBranch ? 5f : 7f);
+                        Color endpointColor = segment.Endpoint ==
+                            WoundPathEndpoint.Exit ? Color.cyan : woundColor;
+                        AddWorldMarker(segment.EndPoint, endpointColor, 0.022f);
+                        if (!impact.Trajectory.HasBranches &&
+                            segment.Endpoint == WoundPathEndpoint.Exit)
+                            AddWorldLine(segment.EndPoint,
+                                segment.EndPoint + segment.Direction *
+                                    approachDistance,
+                                woundColor, 2.5f);
+                    }
+                }
                 if (!impact.ArmorStopped && (impact.Heart || impact.Brain ||
                     impact.CervicalSpine || impact.ThoracicSpine))
                 {
@@ -392,23 +543,170 @@ namespace TraumaCore
                         limbBone, 5f);
                     AddWorldSphere(impact.BoneIntersection, 0.012f, limbBone);
                 }
+                if (!impact.ArmorStopped && impact.Ribcage &&
+                    impact.Trajectory.HasPath)
+                {
+                    Vector3 ribIntersection = impact.Trajectory.EntryPoint +
+                        impact.Trajectory.EntryDirection *
+                        OrganSystem.RibcageMinimumDepth;
+                    Color ribColor = new Color(1f, 0.78f, 0.12f, 1f);
+                    AddWorldSphere(ribIntersection, 0.014f, ribColor);
+                    AddWorldMarker(ribIntersection, Color.white, 0.028f);
+                }
+                if (!impact.ArmorStopped && impact.Skull &&
+                    impact.Trajectory.HasPath)
+                {
+                    Vector3 skullIntersection = impact.Trajectory.EntryPoint +
+                        impact.Trajectory.EntryDirection *
+                        OrganSystem.SkullMinimumDepth;
+                    Color skullColor = new Color(0.55f, 0.82f, 1f, 1f);
+                    AddWorldSphere(skullIntersection, 0.012f, skullColor);
+                    AddWorldMarker(skullIntersection, Color.white, 0.026f);
+                }
             }
         }
 
-        private void AddArmorWeakSpotDebug(Player player)
+        private void AddImpactDebugPanels(TraumaController trauma,
+            ref int labelCount)
         {
-            _armorWeakSpots.Clear();
-            CustomArmorPenetrationPatch.CopyDebugWeakSpots(player, _armorWeakSpots);
-            for (int i = 0; i < _armorWeakSpots.Count; i++)
+            if (trauma == null) return;
+            IList<TraumaController.DebugImpact> impacts = trauma.DebugImpacts;
+            int row = 0;
+            for (int i = impacts.Count - 1; i >= 0; i--)
             {
-                CustomArmorPenetrationPatch.DebugWeakSpot spot = _armorWeakSpots[i];
-                float strength = Mathf.InverseLerp(2f, 5f, spot.Multiplier);
-                Color color = Color.Lerp(new Color(1f, 0.85f, 0.1f, 0.95f),
-                    new Color(1f, 0.05f, 0.02f, 0.98f), strength);
-                AddWorldSphere(spot.Position,
-                    CustomArmorPenetrationPatch.WeakSpotRadius, color);
-                AddWorldMarker(spot.Position, color, 0.012f);
+                UpdateImpactDebugPanel(labelCount, impacts[i], row,
+                    impacts.Count - i);
+                labelCount++;
+                row++;
             }
+        }
+
+        private void UpdateImpactDebugPanel(int index,
+            TraumaController.DebugImpact impact, int row, int impactNumber)
+        {
+            Rect rect = _canvasRect.rect;
+            Vector2 mainPanelPosition = new Vector2(
+                rect.xMax - 190f, rect.yMax - 175f);
+            Text label = GetDebugLabel(index);
+            RectTransform panel = (RectTransform)label.rectTransform.parent;
+            panel.sizeDelta = new Vector2(430f, 170f);
+            panel.anchoredPosition = mainPanelPosition +
+                new Vector2(-40f, -190f - row * 174f);
+            label.color = impact.ArmorStopped ? Color.gray :
+                impact.BleedType == BleedType.Heavy
+                    ? new Color(1f, 0.25f, 0.25f, 1f)
+                    : new Color(1f, 0.92f, 0.45f, 1f);
+            label.text = BuildImpactPanelText(impact, impactNumber);
+            label.gameObject.SetActive(true);
+            panel.gameObject.SetActive(true);
+        }
+
+        private string BuildImpactPanelText(TraumaController.DebugImpact impact,
+            int impactNumber)
+        {
+            float retainedVelocityPercent = impact.OriginalImpactVelocity > 0.01f
+                ? impact.ImpactVelocity / impact.OriginalImpactVelocity * 100f
+                : 100f;
+            string hitboxName = string.IsNullOrEmpty(impact.HitboxName)
+                ? "unknown" : impact.HitboxName;
+            string referenceName = string.IsNullOrEmpty(impact.DepthReferenceName)
+                ? "collider bounds" : impact.DepthReferenceName;
+            string firstBone = impact.FirstBoneDistance >= 0f
+                ? FormatCentimeters(impact.FirstBoneDistance) : "none";
+
+            _debugText.Length = 0;
+            _debugText.Append("IMPACT ").Append(impactNumber).Append("  ")
+                .Append(impact.BodyPart).Append("  [").Append(impact.BleedType)
+                .Append("]  hitbox=").Append(hitboxName)
+                .Append("\nSHOT ").Append(impact.FireIndex)
+                .Append("  PROJECTILE ").Append(impact.ProjectileIndex);
+            if (impact.HasFragmentation)
+                _debugText.Append(
+                    "  <color=#FF4FD8><b>FRAGMENTATION ")
+                    .Append(impact.FragmentPathCount)
+                    .Append(" PATHS @ ")
+                    .Append(FormatCentimeters(impact.FragmentationDepth))
+                    .Append("  +")
+                    .Append((impact.FragmentDamageBonus /
+                        impact.FragmentPathCount).ToString("0.00"))
+                    .Append(" EACH / +")
+                    .Append(impact.FragmentDamageBonus.ToString("0.00"))
+                    .Append(" TOTAL DMG")
+                    .Append("</b></color>");
+            else
+                _debugText.Append(
+                    "  <color=#8C8C8C>NO FRAGMENTATION (")
+                    .Append(impact.FragmentationChance.ToString("P1"))
+                    .Append(")</color>");
+            _debugText
+                .Append("\nENTRY  ").Append(impact.PassedThrough ? "EXIT" : "STOP")
+                .Append("  [").Append(BuildImpactTargetText(impact)).Append(']')
+                .Append("\nbullet ").Append(FormatCentimeters(impact.TraveledDepth))
+                .Append(" / center ").Append(FormatCentimeters(impact.ReferenceThickness))
+                .Append("  crossed ").Append((impact.CenterDepthRatio * 100f).ToString("0"))
+                .Append("%  threshold ")
+                .Append(FormatCentimeters(impact.ReferenceThickness * 0.5f))
+                .Append("\nstrength ").Append((impact.DepthRatio * 100f).ToString("0"))
+                .Append("%  bleed ").Append(impact.BleedDamageMultiplier.ToString("0.00"))
+                .Append("x  time ").Append(impact.BleedDurationMultiplier.ToString("0.00"))
+                .Append("x  score ").Append(impact.WoundScore.ToString("0.0"))
+                .Append("\nbone hits=").Append(impact.BoneCollisionCount)
+                .Append("  first=").Append(firstBone).Append("  fixed cost=")
+                .Append(FormatCentimeters(impact.BoneResistanceDepth))
+                .Append("\ndepth ").Append(FormatCentimeters(impact.OriginalPenetrationDepth))
+                .Append('>').Append(FormatCentimeters(impact.PenetrationDepth))
+                .Append("  velocity ").Append(impact.OriginalImpactVelocity.ToString("0"))
+                .Append('>').Append(impact.ImpactVelocity.ToString("0"))
+                .Append("m/s (").Append(retainedVelocityPercent.ToString("0"))
+                .Append("%)  ").Append(impact.BulletDiameter.ToString("0.0"))
+                .Append("mm\nmodel=").Append(impact.PenetrationModel)
+                .Append("  armor=").Append(FormatCentimeters(
+                    impact.ArmorPenetrationDepth))
+                .Append("  kinetic=").Append(FormatCentimeters(
+                    impact.KineticPenetrationDepth))
+                .Append("\nEFT armor margin=")
+                .Append(impact.ArmorPenetrationMargin.ToString("+0.0;-0.0;none"))
+                .Append("  retention=")
+                .Append(impact.ArmorPenetrationRetention.ToString("P0"))
+                .Append("  frag boost=+")
+                .Append(impact.ArmorFragmentationChanceBonus.ToString("P1"))
+                .Append("\ncenter source=").Append(referenceName);
+            return _debugText.ToString();
+        }
+
+        private static string FormatCentimeters(float meters) =>
+            (meters * 100f).ToString("0.0") + "cm";
+
+        private static string BuildImpactTargetText(
+            TraumaController.DebugImpact impact)
+        {
+            if (impact.ArmorStopped) return "ARMOR STOP";
+            string targets = string.Empty;
+            if (impact.Skull) targets = "SKULL";
+            if (impact.Ribcage) targets = AppendImpactTarget(targets, "RIBCAGE");
+            if (impact.CervicalSpine)
+                targets = AppendImpactTarget(targets, "CERVICAL");
+            if (impact.ThoracicSpine)
+                targets = AppendImpactTarget(targets, "THORACIC");
+            if (impact.Bone)
+                targets = AppendImpactTarget(targets, "LIMB BONE");
+            if (impact.Heart) targets = AppendImpactTarget(targets, "HEART");
+            if (impact.Brain) targets = AppendImpactTarget(targets, "BRAIN");
+            return string.IsNullOrEmpty(targets) ? "FLESH" : targets;
+        }
+
+        private static string AppendImpactTarget(string targets, string target)
+        {
+            return string.IsNullOrEmpty(targets) ? target : targets + " + " + target;
+        }
+
+        private static Color GetOrganEspColor(OrganDefinition organ)
+        {
+            Color color = organ.Color;
+            color.a = organ == OrganSystem.Heart
+                ? OrganSystem.HeartEspOpacity.Value
+                : OrganSystem.BrainEspOpacity.Value;
+            return color;
         }
 
         private void AddWorldSphere(Vector3 center, float radius, Color color)
@@ -767,17 +1065,96 @@ namespace TraumaCore
 
         private void AddLimbBones(Player player)
         {
-            AddLimbBones(player, EBodyPart.LeftArm, new Color(0.1f, 0.85f, 1f, 0.95f));
-            AddLimbBones(player, EBodyPart.RightArm, new Color(0.1f, 0.85f, 1f, 0.95f));
-            AddLimbBones(player, EBodyPart.LeftLeg, new Color(0.2f, 1f, 0.55f, 0.95f));
-            AddLimbBones(player, EBodyPart.RightLeg, new Color(0.2f, 1f, 0.55f, 0.95f));
+            float opacity = OrganSystem.BoneEspOpacity.Value;
+            AddLimbBones(player, EBodyPart.LeftArm,
+                new Color(0.1f, 0.85f, 1f, opacity));
+            AddLimbBones(player, EBodyPart.RightArm,
+                new Color(0.1f, 0.85f, 1f, opacity));
+            AddLimbBones(player, EBodyPart.LeftLeg,
+                new Color(0.2f, 1f, 0.55f, opacity));
+            AddLimbBones(player, EBodyPart.RightLeg,
+                new Color(0.2f, 1f, 0.55f, opacity));
         }
+
+        private void AddChestColliderVolume(Player player)
+        {
+            Color ribColor = new Color(0.95f, 0.82f, 0.55f,
+                OrganSystem.RibcageEspOpacity.Value);
+            AddInsetBodyPartMesh(player, EBodyPart.Chest,
+                OrganSystem.RibcageMinimumDepth, ribColor);
+        }
+
+        private void AddInsetBodyPartMesh(Player player, EBodyPart bodyPart,
+            float inset, Color color)
+        {
+            if (!OrganSystem.TryGetBodyPartBounds(player, bodyPart,
+                out Bounds bounds)) return;
+            Vector3 right = player.Transform.right.normalized;
+            Vector3 up = player.Transform.up.normalized;
+            Vector3 forward = player.Transform.forward.normalized;
+            Vector3 worldExtents = bounds.extents;
+            Vector3 radii = new Vector3(
+                Mathf.Max(0.01f, ProjectBoundsExtent(worldExtents, right) - inset),
+                Mathf.Max(0.01f, ProjectBoundsExtent(worldExtents, up) - inset),
+                Mathf.Max(0.01f, ProjectBoundsExtent(worldExtents, forward) - inset));
+
+            const int latitudeBands = 5;
+            for (int latitudeIndex = 0; latitudeIndex < latitudeBands;
+                latitudeIndex++)
+            {
+                float latitude = Mathf.Lerp(-Mathf.PI / 3f, Mathf.PI / 3f,
+                    latitudeIndex / (latitudeBands - 1f));
+                float ringScale = Mathf.Cos(latitude);
+                float height = Mathf.Sin(latitude) * radii.y;
+                Vector3 previous = default;
+                for (int segment = 0; segment <= EllipsoidSegments; segment++)
+                {
+                    Vector3 point = bounds.center + up * height +
+                        right * (CircleCos[segment] * radii.x * ringScale) +
+                        forward * (CircleSin[segment] * radii.z * ringScale);
+                    if (segment > 0) AddWorldLine(previous, point, color, 2f);
+                    previous = point;
+                }
+            }
+
+            const int longitudeBands = 12;
+            const int verticalSegments = 18;
+            for (int longitudeIndex = 0; longitudeIndex < longitudeBands;
+                longitudeIndex++)
+            {
+                float longitude = longitudeIndex * Mathf.PI * 2f /
+                    longitudeBands;
+                float longitudeCos = Mathf.Cos(longitude);
+                float longitudeSin = Mathf.Sin(longitude);
+                Vector3 previous = default;
+                for (int verticalIndex = 0; verticalIndex <= verticalSegments;
+                    verticalIndex++)
+                {
+                    float latitude = Mathf.Lerp(-Mathf.PI / 2f,
+                        Mathf.PI / 2f, verticalIndex / (float)verticalSegments);
+                    float latitudeCos = Mathf.Cos(latitude);
+                    Vector3 point = bounds.center +
+                        up * (Mathf.Sin(latitude) * radii.y) +
+                        right * (longitudeCos * latitudeCos * radii.x) +
+                        forward * (longitudeSin * latitudeCos * radii.z);
+                    if (verticalIndex > 0)
+                        AddWorldLine(previous, point, color, 2f);
+                    previous = point;
+                }
+            }
+        }
+
+        private static float ProjectBoundsExtent(Vector3 boundsExtents,
+            Vector3 axis) => Mathf.Abs(axis.x) * boundsExtents.x +
+            Mathf.Abs(axis.y) * boundsExtents.y +
+            Mathf.Abs(axis.z) * boundsExtents.z;
 
         private void AddUpperSpine(Player player)
         {
             Vector3 brainBase, chestTop;
             if (!OrganSystem.TryGetUpperSpineSegment(player, out brainBase, out chestTop)) return;
-            Color color = new Color(0.05f, 1f, 0.75f, 0.98f);
+            Color color = new Color(0.05f, 1f, 0.75f,
+                OrganSystem.BoneEspOpacity.Value);
             AddWorldBoneSegment(brainBase, chestTop, OrganSystem.UpperSpineRadius, color);
             AddWorldMarker(brainBase, color, 0.012f);
             AddWorldMarker(chestTop, color, 0.012f);
@@ -787,7 +1164,8 @@ namespace TraumaCore
         {
             Vector3 chestTop, stomachTop;
             if (!OrganSystem.TryGetThoracicSpineSegment(player, out chestTop, out stomachTop)) return;
-            Color color = new Color(1f, 0.78f, 0.05f, 0.98f);
+            Color color = new Color(1f, 0.78f, 0.05f,
+                OrganSystem.BoneEspOpacity.Value);
             AddWorldBoneSegment(chestTop, stomachTop, OrganSystem.ThoracicSpineRadius, color);
             AddWorldMarker(chestTop, color, 0.012f);
             AddWorldMarker(stomachTop, color, 0.012f);
@@ -861,6 +1239,9 @@ namespace TraumaCore
             Vector2 position = new Vector2(rect.xMax - 190f, rect.yMax - 175f);
 
             Text label = GetDebugLabel(index);
+            RectTransform panel = (RectTransform)label.rectTransform.parent;
+            panel.sizeDelta = new Vector2(350f, 320f);
+            label.color = Color.white;
             float dps = trauma != null ? trauma.BleedDamagePerSecond : 0f;
 
             _debugText.Length = 0;
@@ -872,37 +1253,17 @@ namespace TraumaCore
             AppendHealth(EBodyPart.Stomach, "STOMACH");
             AppendHealth(EBodyPart.LeftArm, "L ARM"); AppendHealth(EBodyPart.RightArm, "R ARM");
             AppendHealth(EBodyPart.LeftLeg, "L LEG"); AppendHealth(EBodyPart.RightLeg, "R LEG");
-            _debugText.Append("\nORGANS  BRAIN=INSTANT  HEART wounds=").Append(trauma != null ? trauma.HeartWounds : 0)
-                .Append(" bleed=").Append(trauma != null ? trauma.EffectiveHeartWounds.ToString("0.0") : "0").Append(" HP/s");
-            _debugText.Append("\nCHEST  wounds=").Append(trauma != null ? trauma.ChestStacks : 0)
-                .Append(" bleed=").Append(trauma != null ? trauma.EffectiveChestStacks.ToString("0.0") : "0").Append(" HP/s")
-                .Append(" decay=").Append(trauma != null ? trauma.ChestDecayStrength.ToString("0.00") : "0").Append('x')
-                .Append(" last+=").Append(trauma != null ? trauma.LastChestSeverity.ToString("0.00") : "0").Append(" HP/s");
-            if (trauma != null && trauma.LastChestInterval > 0f)
-                _debugText.Append('@').Append((trauma.LastChestInterval * 1000f).ToString("0")).Append("ms");
-            _debugText
-                .Append("\nHEART  last+=").Append(trauma != null ? trauma.LastHeartSeverity.ToString("0.00") : "0").Append(" HP/s");
-            if (trauma != null && trauma.LastHeartInterval > 0f)
-                _debugText.Append('@').Append((trauma.LastHeartInterval * 1000f).ToString("0")).Append("ms");
-            _debugText
-                .Append("  FACE=").Append(trauma != null ? trauma.FaceWounds : 0)
-                .Append("  STOMACH=").Append(trauma != null ? trauma.StomachWounds : 0)
-                .Append("  LIMBS=").Append(trauma != null ? trauma.LimbWounds : 0)
+            _debugText.Append("\nWOUNDS  LIGHT=")
+                .Append(trauma != null ? trauma.LightWoundCount : 0)
+                .Append("  HEAVY=")
+                .Append(trauma != null ? trauma.HeavyWoundCount : 0);
+            _debugText.Append("\nHEART  wounds=")
+                .Append(trauma != null ? trauma.HeartWoundCount : 0)
+                .Append("  permanent=")
+                .Append(trauma != null
+                    ? trauma.HeartBleedDamagePerSecond.ToString("0.0") : "0")
+                .Append(" HP/s")
                 .Append("\nTOTAL BLEED  ").Append(dps.ToString("0.0")).Append(" HP/s");
-            _armorWeakSpots.Clear();
-            CustomArmorPenetrationPatch.CopyDebugWeakSpots(player, _armorWeakSpots);
-            _debugText.Append("\nARMOR WEAK SPOTS  ").Append(_armorWeakSpots.Count)
-                .Append("  radius=")
-                .Append((CustomArmorPenetrationPatch.WeakSpotRadius * 100f).ToString("0.0"))
-                .Append("cm  next=");
-            if (_armorWeakSpots.Count == 0)
-                _debugText.Append("none");
-            else
-                for (int i = 0; i < _armorWeakSpots.Count; i++)
-                {
-                    if (i > 0) _debugText.Append(',');
-                    _debugText.Append(_armorWeakSpots[i].Multiplier.ToString("0")).Append('x');
-                }
             if (trauma != null && trauma.BruiseStrength > 0f)
                 _debugText.Append("\nBRUISED  ").Append((trauma.BruiseStrength * 100f).ToString("0"))
                     .Append("%  ").Append(trauma.BruiseTimeLeft.ToString("0.0")).Append('s');
@@ -922,7 +1283,7 @@ namespace TraumaCore
             if (!any) _debugText.Append("none");
 
             label.text = _debugText.ToString();
-            ((RectTransform)label.rectTransform.parent).anchoredPosition = position;
+            panel.anchoredPosition = position;
             label.gameObject.SetActive(true);
             label.transform.parent.gameObject.SetActive(true);
             return true;

@@ -20,7 +20,8 @@ namespace TraumaCore.Patches.Trauma
         {
             TraumaController trauma = __instance != null
                 ? __instance.GetComponent<TraumaController>() : null;
-            if (!OrganSystem.Enabled.Value || trauma == null ||
+            if (!OrganSystem.Enabled.Value ||
+                !Plugin.EnableTraumaPresentation.Value || trauma == null ||
                 (!trauma.TraumaDeathVoicePending && !trauma.HeadDeathVoicePending) ||
                 __instance.Speaker == null)
                 return;

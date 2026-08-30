@@ -30,11 +30,16 @@ namespace TraumaCore.Patches.DeathScreen
             SessionResultExitStatus __instance,
             Profile activeProfile,
             ESideType side,
-            ExitStatus exitStatus) =>
+            ExitStatus exitStatus)
+        {
+            if (!Plugin.EnableDeathScreenReport.Value)
+                return;
+
             DeathScreenHitMarkerPresenter.Show(
                 __instance,
                 activeProfile,
                 side,
                 exitStatus);
+        }
     }
 }

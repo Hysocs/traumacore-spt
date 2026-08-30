@@ -25,6 +25,9 @@ namespace TraumaCore.Patches.DeathScreen
             DamageIcon __instance,
             List<DamageStats> damageList)
         {
+            if (!Plugin.EnableDeathScreenReport.Value)
+                return;
+
             if (BleedDamageTooltipBuilder.TryBuildTooltip(
                 damageList,
                 out string tooltip))

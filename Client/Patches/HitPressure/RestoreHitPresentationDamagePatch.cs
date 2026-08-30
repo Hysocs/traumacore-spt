@@ -72,6 +72,9 @@ namespace TraumaCore.Patches.HitPressure
             EDamageType type,
             float damageReducedByArmor)
         {
+            if (!Plugin.EnableHitPressure.Value)
+                return;
+
             if (HitPresentationDamageContext.TryGetDamage(
                 bodyPart,
                 type,

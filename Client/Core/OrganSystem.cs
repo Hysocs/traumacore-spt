@@ -11,19 +11,17 @@ namespace TraumaCore
     {
         internal readonly float DamageMultiplier;
         internal readonly bool BodyTraumaEnabled;
-        internal readonly bool ArmorPenetrationEnabled;
         internal readonly bool BrainEnabled;
         internal readonly bool HeartEnabled;
         internal readonly bool CervicalSpineEnabled;
         internal readonly bool ThoracicSpineEnabled;
 
         internal TargetRules(float damageMultiplier, bool bodyTraumaEnabled,
-            bool armorPenetrationEnabled, bool brainEnabled,
-            bool heartEnabled, bool cervicalSpineEnabled, bool thoracicSpineEnabled)
+            bool brainEnabled, bool heartEnabled, bool cervicalSpineEnabled,
+            bool thoracicSpineEnabled)
         {
             DamageMultiplier = damageMultiplier;
             BodyTraumaEnabled = bodyTraumaEnabled;
-            ArmorPenetrationEnabled = armorPenetrationEnabled;
             BrainEnabled = brainEnabled;
             HeartEnabled = heartEnabled;
             CervicalSpineEnabled = cervicalSpineEnabled;
@@ -91,8 +89,17 @@ namespace TraumaCore
         public bool IntersectsShot(Player player, Vector3 hitPoint, Vector3 direction,
             out Vector3 intersection, out float travelDistance)
         {
+            return IntersectsShot(player, hitPoint, direction, out intersection,
+                out travelDistance, out _);
+        }
+
+        public bool IntersectsShot(Player player, Vector3 hitPoint, Vector3 direction,
+            out Vector3 intersection, out float travelDistance,
+            out float exitDistance)
+        {
             intersection = hitPoint;
             travelDistance = 0f;
+            exitDistance = 0f;
             Transform anchor = GetAnchor(player);
             if (anchor == null || direction.sqrMagnitude < 0.0001f) return false;
 
@@ -127,6 +134,7 @@ namespace TraumaCore
                 float entry = near >= 0f ? near : far >= 0f ? 0f : -1f;
                 if (entry < 0f || entry > 0.55f) return false;
                 travelDistance = entry;
+                exitDistance = Mathf.Max(entry, far);
                 intersection = hitPoint + ray * entry;
                 return true;
             }
@@ -150,6 +158,7 @@ namespace TraumaCore
                 if (enter > exit) return false;
             }
             travelDistance = enter;
+            exitDistance = Mathf.Max(enter, exit);
             intersection = hitPoint + ray * enter;
             return exit >= 0f && enter <= 0.55f;
         }
@@ -184,6 +193,48 @@ namespace TraumaCore
         internal const float LegBoneRadius = 0.01875f;
         internal const float UpperSpineRadius = 0.021875f;
         internal const float ThoracicSpineRadius = 0.025f;
+        internal static bool TryFindSkullIntersection(WoundBallistics wound,
+            Vector3 direction, out Vector3 intersection)
+        {
+            intersection = wound.EntryPoint;
+            if (direction.sqrMagnitude < 0.0001f ||
+                wound.TraveledDepth < SkullMinimumDepth) return false;
+            intersection += direction.normalized * SkullMinimumDepth;
+            return true;
+        }
+
+        internal static bool TryFindRibcageIntersection(
+            WoundBallistics wound, Vector3 direction, out Vector3 intersection)
+        {
+            intersection = wound.EntryPoint;
+            if (direction.sqrMagnitude < 0.0001f ||
+                wound.TraveledDepth < RibcageMinimumDepth) return false;
+            intersection += direction.normalized * RibcageMinimumDepth;
+            return true;
+        }
+
+        internal static bool TryGetBodyPartBounds(Player player,
+            EBodyPart bodyPart, out Bounds bounds)
+        {
+            bounds = default;
+            BodyPartCollider[] colliders = player?.PlayerBones?.BodyPartColliders;
+            bool hasBounds = false;
+            if (colliders == null) return false;
+            for (int i = 0; i < colliders.Length; i++)
+            {
+                BodyPartCollider bodyCollider = colliders[i];
+                if (bodyCollider == null ||
+                    bodyCollider.BodyPartType != bodyPart ||
+                    bodyCollider.Collider == null) continue;
+                if (!hasBounds)
+                {
+                    bounds = bodyCollider.Collider.bounds;
+                    hasBounds = true;
+                }
+                else bounds.Encapsulate(bodyCollider.Collider.bounds);
+            }
+            return hasBounds;
+        }
 
         internal static bool TryGetUpperSpineSegment(Player player,
             out Vector3 brainBase, out Vector3 chestTop)
@@ -277,6 +328,76 @@ namespace TraumaCore
                     break;
             }
             return firstStart != null && firstEnd != null || secondStart != null && secondEnd != null;
+        }
+
+        internal static bool TryFindDepthReferenceCenter(Player player,
+            EBodyPart bodyPart, Vector3 hitPoint, out Vector3 center,
+            out string referenceName)
+        {
+            center = hitPoint;
+            referenceName = "collider bounds";
+            if (bodyPart == EBodyPart.Head && Brain != null)
+            {
+                center = Brain.WorldCenter(player);
+                referenceName = "brain center";
+                return center != Vector3.zero;
+            }
+            if (bodyPart == EBodyPart.Chest &&
+                TryGetBodyPartBounds(player, bodyPart, out Bounds chestBounds))
+            {
+                center = chestBounds.center;
+                referenceName = "chest collider center";
+                return true;
+            }
+            if (bodyPart == EBodyPart.Stomach &&
+                TryGetThoracicSpineSegment(player, out Vector3 chestTop,
+                    out Vector3 stomachTop))
+            {
+                center = ClosestPointOnSegment(hitPoint, chestTop, stomachTop);
+                referenceName = "torso centerline";
+                return true;
+            }
+
+            if (!TryGetBoneSegments(player, bodyPart, out Transform firstStart,
+                out Transform firstEnd, out Transform secondStart,
+                out Transform secondEnd)) return false;
+            float bestDistance = float.MaxValue;
+            CaptureNearestSegmentCenter(hitPoint, firstStart, firstEnd,
+                ref center, ref bestDistance);
+            CaptureNearestSegmentCenter(hitPoint, secondStart, secondEnd,
+                ref center, ref bestDistance);
+            if (IsLeg(bodyPart) && firstEnd != null && secondStart != null &&
+                firstEnd != secondStart)
+                CaptureNearestSegmentCenter(hitPoint, firstEnd, secondStart,
+                    ref center, ref bestDistance);
+            if (bestDistance == float.MaxValue) return false;
+            referenceName = IsLeg(bodyPart)
+                ? "nearest leg bone center" : "nearest arm bone center";
+            return true;
+        }
+
+        private static void CaptureNearestSegmentCenter(Vector3 hitPoint,
+            Transform start, Transform end, ref Vector3 center,
+            ref float bestDistance)
+        {
+            if (start == null || end == null) return;
+            Vector3 candidate = ClosestPointOnSegment(hitPoint,
+                start.position, end.position);
+            float distance = (candidate - hitPoint).sqrMagnitude;
+            if (distance >= bestDistance) return;
+            bestDistance = distance;
+            center = candidate;
+        }
+
+        private static Vector3 ClosestPointOnSegment(Vector3 point,
+            Vector3 start, Vector3 end)
+        {
+            Vector3 segment = end - start;
+            float lengthSquared = segment.sqrMagnitude;
+            if (lengthSquared <= 0.000001f) return start;
+            float position = Mathf.Clamp01(Vector3.Dot(point - start,
+                segment) / lengthSquared);
+            return start + segment * position;
         }
 
         internal static bool IntersectsLimbBone(Player player, EBodyPart bodyPart,

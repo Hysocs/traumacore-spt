@@ -15,7 +15,10 @@ namespace TraumaCore.Patches.DeathScreen
                 nameof(HealthStatisticsManager.BeginStatisticsSession));
 
         [PatchPostfix]
-        private static void PatchPostfix(HealthStatisticsManager __instance) =>
-            DeathScreenDamageTracker.StartRaidTracking(__instance.Profile);
+        private static void PatchPostfix(HealthStatisticsManager __instance)
+        {
+            if (Plugin.EnableDeathScreenReport.Value)
+                DeathScreenDamageTracker.StartRaidTracking(__instance.Profile);
+        }
     }
 }

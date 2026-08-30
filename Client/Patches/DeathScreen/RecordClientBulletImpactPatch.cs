@@ -14,14 +14,21 @@ namespace TraumaCore.Patches.DeathScreen
             BulletImpactPatchTarget.FindApplyShot(typeof(ClientPlayer));
 
         [PatchPrefix]
-        private static void PatchPrefix(
+        private static void CaptureClientBulletImpact(
             ClientPlayer __instance,
             DamageInfo damageInfo,
-            EBodyPart bodyPartType) =>
+            EBodyPart bodyPartType,
+            ShotId shotId)
+        {
+            if (!Plugin.EnableDeathScreenReport.Value)
+                return;
+
             DeathScreenDamageTracker.CaptureBulletImpact(
                 __instance.Profile,
                 __instance,
                 bodyPartType,
-                damageInfo);
+                damageInfo,
+                shotId._fragmentIndex);
+        }
     }
 }

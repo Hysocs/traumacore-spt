@@ -25,6 +25,7 @@ namespace TraumaCore.Patches.Bleeding
         [PatchPrefix]
         private static bool PatchPrefix(BleedingEffect __instance)
         {
+            bool customDamageStarted = false;
             try
             {
                 ActiveHealthController healthController = __instance.HealthController;
@@ -51,8 +52,11 @@ namespace TraumaCore.Patches.Bleeding
                 if (!isBleedDamage)
                     return true;
 
-                IObserverToPlayerBridge aggressorBridge = Singleton<GameWorld>
-                    .Instance
+                GameWorld gameWorld = Singleton<GameWorld>.Instance;
+                if (gameWorld == null)
+                    return true;
+
+                IObserverToPlayerBridge aggressorBridge = gameWorld
                     .GetEverExistedBridgeByProfileID(lastAggressor.ProfileId);
                 if (aggressorBridge == null)
                     return true;
@@ -60,17 +64,30 @@ namespace TraumaCore.Patches.Bleeding
                 DamageInfo damageInfoWithAttacker = bleedDamageInfo;
                 damageInfoWithAttacker.Player = aggressorBridge;
 
+                float tickDuration = __instance.float_16;
+                float damageMultiplier = healthController.DamageMultiplier;
+                if (tickDuration <= float.Epsilon ||
+                    damageMultiplier <= float.Epsilon)
+                {
+                    TraumaLog.Warning(
+                        "[BleedKillCreditPatch] EFT reported an invalid bleed " +
+                        $"tick duration ({tickDuration}) or damage multiplier " +
+                        $"({damageMultiplier}); using the native bleed path.");
+                    return true;
+                }
+
                 float totalDamageApplied = 0f;
+                customDamageStarted = true;
                 foreach (EBodyPart realBodyPart in HealthHelper.RealBodyParts)
                 {
                     totalDamageApplied += healthController.ApplyDamage(realBodyPart, damagePerBodyPart, damageInfoWithAttacker);
                 }
 
-                float damagePerSecond = -totalDamageApplied / __instance.float_16;
+                float damagePerSecond = -totalDamageApplied / tickDuration;
                 if (Math.Abs(__instance.float_19 - damagePerSecond) >= float.Epsilon)
                 {
                     __instance.SetHealthRatesPerSecond(
-                        damagePerSecond / healthController.DamageMultiplier,
+                        damagePerSecond / damageMultiplier,
                         __instance.float_20,
                         0f,
                         0f);
@@ -82,7 +99,7 @@ namespace TraumaCore.Patches.Bleeding
             {
                 TraumaLog.Error(
                     $"[BleedKillCreditPatch] Error: {exception}");
-                return true;
+                return !customDamageStarted;
             }
         }
     }

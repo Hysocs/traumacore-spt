@@ -2,6 +2,7 @@ using EFT;
 using EFT.Ballistics;
 using EFT.HealthSystem;
 using Comfort.Common;
+using TraumaCore.Patches.HealthEffects;
 using TraumaCore.Patches.Trauma;
 using Systems.Effects;
 using UnityEngine;
@@ -11,50 +12,189 @@ namespace TraumaCore
 {
     internal sealed class TraumaController : MonoBehaviour
     {
+        private const float ReferencePostArmorDamage = 50f;
+
         private sealed class WoundTrack
         {
-            internal int Count;
-            internal float Effective;
-            internal float LastWoundTime = float.MinValue;
-            internal float LastInterval;
-            internal float LastSeverity = 1f;
+            private sealed class Wound
+            {
+                internal float Severity;
+                internal float Created;
+                internal float Duration;
+                internal BleedType Type;
+            }
 
-            internal bool Active { get { return Count > 0; } }
+            private readonly List<Wound> _wounds = new List<Wound>();
+            internal int Count { get { return _wounds.Count; } }
+            internal bool Active { get { return _wounds.Count > 0; } }
+            internal BleedType StrongestType
+            {
+                get
+                {
+                    BleedType strongest = BleedType.Light;
+                    for (int i = 0; i < _wounds.Count; i++)
+                        if (_wounds[i].Type > strongest) strongest = _wounds[i].Type;
+                    return strongest;
+                }
+            }
 
-            internal float Add(float originalDamage, float divisor, float scale = 1f)
+            internal float Add(BleedType type, float damageMultiplier,
+                float durationMultiplier, float? totalDamage = null,
+                bool isPermanent = false)
             {
                 float now = Time.unscaledTime;
-                float interval = now - LastWoundTime;
-                Count++;
-                LastWoundTime = now;
-                LastInterval = Count > 1 && interval > 0f ? interval : 0f;
-                LastSeverity = Mathf.Max(0f, originalDamage) /
-                    Mathf.Max(0.01f, divisor) * scale;
-                Effective += LastSeverity;
-                return LastSeverity;
+                float duration = isPermanent
+                    ? float.PositiveInfinity
+                    : Mathf.Max(0.01f,
+                        OrganSystem.NonHeartDecayDuration.Value *
+                        Mathf.Max(0.01f, durationMultiplier));
+                float woundMultiplier = Mathf.Max(0f, damageMultiplier);
+                float severity;
+                if (isPermanent)
+                    severity = OrganSystem.HeartBaseBleedDamagePerSecond *
+                        woundMultiplier;
+                else
+                {
+                    float woundTotalDamage = totalDamage.HasValue
+                        ? Mathf.Max(0f, totalDamage.Value)
+                        : 0f;
+                    severity = woundTotalDamage /
+                        OrganSystem.GetBleedDecayArea(duration);
+                }
+                _wounds.Add(new Wound
+                {
+                    Severity = severity,
+                    Created = now,
+                    Duration = duration,
+                    Type = type
+                });
+                return severity;
             }
 
-            internal bool Clear()
+            internal void Clear()
             {
-                bool wasActive = Active;
-                Count = 0;
-                Effective = 0f;
-                LastWoundTime = float.MinValue;
-                LastInterval = 0f;
-                LastSeverity = 0f;
-                return wasActive;
+                _wounds.Clear();
             }
+
+            internal void AdvanceClotting(float progress)
+            {
+                if (!Active) return;
+                float now = Time.unscaledTime;
+                float remainingMultiplier = 1f - Mathf.Clamp01(progress);
+                for (int i = 0; i < _wounds.Count; i++)
+                {
+                    Wound wound = _wounds[i];
+                    float duration = wound.Duration;
+                    float elapsed = Mathf.Clamp(now - wound.Created, 0f, duration);
+                    float remaining = (duration - elapsed) * remainingMultiplier;
+                    wound.Created = now - (duration - remaining);
+                }
+            }
+
+            internal float GetDamagePerSecond(BleedType? type = null)
+            {
+                float damagePerSecond = 0f;
+                for (int i = 0; i < _wounds.Count; i++)
+                {
+                    if (type.HasValue && _wounds[i].Type != type.Value) continue;
+                    damagePerSecond += _wounds[i].Severity *
+                        GetDecayStrength(_wounds[i].Created,
+                            _wounds[i].Duration);
+                }
+                return damagePerSecond;
+            }
+
+            internal float GetPermanentDamagePerSecond()
+            {
+                float damagePerSecond = 0f;
+                for (int i = 0; i < _wounds.Count; i++)
+                    damagePerSecond += _wounds[i].Severity;
+                return damagePerSecond;
+            }
+
+            internal int CountType(BleedType type)
+            {
+                int count = 0;
+                for (int i = 0; i < _wounds.Count; i++)
+                    if (_wounds[i].Type == type) count++;
+                return count;
+            }
+
+            internal float GetTimeLeft(BleedType? type = null)
+            {
+                float now = Time.unscaledTime;
+                float timeLeft = 0f;
+                for (int i = 0; i < _wounds.Count; i++)
+                {
+                    Wound wound = _wounds[i];
+                    if (type.HasValue && wound.Type != type.Value) continue;
+                    if (float.IsInfinity(wound.Duration))
+                        return float.PositiveInfinity;
+                    timeLeft = Mathf.Max(timeLeft,
+                        wound.Duration - (now - wound.Created));
+                }
+                return Mathf.Max(0f, timeLeft);
+            }
+
+            internal void RemoveClottedWounds()
+            {
+                float now = Time.unscaledTime;
+                for (int i = _wounds.Count - 1; i >= 0; i--)
+                {
+                    if (now - _wounds[i].Created < _wounds[i].Duration) continue;
+                    _wounds.RemoveAt(i);
+                }
+            }
+
         }
         internal struct DebugImpact
         {
             internal Vector3 HitPoint, Direction, Intersection, BoneIntersection;
+            internal Vector3 ReferenceEntryPoint, ReferenceExitPoint;
+            internal WoundTrajectory Trajectory;
             internal float Expires;
+            internal float TissueThickness, PenetrationDepth, ImpactVelocity,
+                BulletDiameter, WoundScore, ReferenceThickness, TraveledDepth,
+                CenterDepthRatio, DepthRatio, BleedDamageMultiplier,
+                BleedDurationMultiplier, OriginalPenetrationDepth,
+                OriginalImpactVelocity, FirstBoneDistance, BoneResistanceDepth,
+                FragmentationChance, FragmentationDepth, FragmentDamageBonus,
+                ArmorPenetrationMargin, ArmorFragmentationChanceBonus,
+                ArmorPenetrationRetention;
+            internal float ArmorPenetrationDepth, KineticPenetrationDepth;
+            internal int BoneCollisionCount, FireIndex, ProjectileIndex;
+            internal int FragmentPathCount;
+            internal EBodyPart BodyPart;
+            internal string HitboxName;
+            internal string DepthReferenceName;
+            internal string PenetrationModel;
+            internal BleedType BleedType;
+            internal bool PassedThrough;
             internal bool Heart;
             internal bool Brain;
             internal bool CervicalSpine;
             internal bool ThoracicSpine;
+            internal bool Ribcage;
+            internal bool Skull;
             internal bool ArmorStopped;
             internal bool Bone;
+            internal bool HasFragmentation;
+        }
+        internal struct ImpactCapture
+        {
+            internal Vector3 HitPoint, Direction, Intersection, BoneIntersection;
+            internal Transform HitTransform;
+            internal WoundBallistics Wound;
+            internal EBodyPart BodyPart;
+            internal string HitboxName;
+            internal float OriginalPenetrationDepth, OriginalImpactVelocity,
+                FirstBoneDistance, BoneResistanceDepth, FragmentDamageBonus;
+            internal float ArmorPenetrationMargin,
+                ArmorFragmentationChanceBonus, ArmorPenetrationRetention;
+            internal int BoneCollisionCount, FireIndex, ProjectileIndex;
+            internal EDamageType DamageType;
+            internal bool Heart, Brain, ArmorStopped, Bone, CervicalSpine,
+                ThoracicSpine, Ribcage, Skull;
         }
         internal struct DebugBloodParticle
         {
@@ -80,7 +220,9 @@ namespace TraumaCore
         private ActiveHealthController _health;
         private float _traumaAccumulator;
         private const float TraumaStep = 1f / 60f;
-        private const float PresentationInterval = 0.25f;
+        private const float MaximumBleedPresentationInterval = 1f;
+        private const float MinimumBleedPresentationInterval = 0.5f;
+        private const int MaximumPresentationBleedCount = 7;
         private float _nextPresentationTime;
         private readonly WoundTrack _chestWounds = new WoundTrack();
         private readonly WoundTrack _heartWounds = new WoundTrack();
@@ -92,12 +234,12 @@ namespace TraumaCore
         private float _currentBruiseStrength;
         private float _bruiseExpires;
         private float _appliedRestorePenalty;
-        private BruisedHealthEffect _bruiseUiEffect;
-        private HeartWoundHealthEffect _heartWoundUiEffect;
+        private ActiveHealthController.Pain _bruiseUiEffect;
         private const float BruiseDuration = 15f;
         private const float CorpseBleedDuration = 8f;
         private Vector3 _lastImpactPoint;
         private Vector3 _lastImpactDirection = Vector3.forward;
+        private WoundTrajectory _lastWoundTrajectory;
         private Transform _lastImpactTransform;
         private float _nextBloodDecalTime;
         private bool _wasAlive;
@@ -109,27 +251,19 @@ namespace TraumaCore
         private readonly List<DebugImpact> _impacts = new List<DebugImpact>(12);
         private readonly List<DebugBloodSource> _bloodSources = new List<DebugBloodSource>(16);
         private readonly List<DebugBloodParticle> _bloodParticles = new List<DebugBloodParticle>(192);
-        private readonly Dictionary<int, int> _bloodVisualHitCounts =
-            new Dictionary<int, int>();
         private readonly List<BodyRenderer> _bodyRenderers = new List<BodyRenderer>(12);
         private readonly Dictionary<EBodyPart, WoundTrack> _bodyWounds =
             new Dictionary<EBodyPart, WoundTrack>();
+        private readonly HashSet<IHealthEffect> _acceleratedBleedEffects =
+            new HashSet<IHealthEffect>();
 
-        internal int ChestStacks { get { return _chestWounds.Count; } }
-        internal float EffectiveChestStacks { get { return _chestWounds.Effective; } }
-        internal float LastChestInterval { get { return _chestWounds.LastInterval; } }
-        internal float LastChestSeverity { get { return _chestWounds.LastSeverity; } }
-        internal bool HasHeartWound { get { return _heartWounds.Active; } }
-        internal int HeartWounds { get { return _heartWounds.Count; } }
-        internal float EffectiveHeartWounds { get { return _heartWounds.Effective; } }
-        internal float LastHeartInterval { get { return _heartWounds.LastInterval; } }
-        internal float LastHeartSeverity { get { return _heartWounds.LastSeverity; } }
+        internal int HeartWoundCount { get { return _heartWounds.Count; } }
+        internal float HeartBleedDamagePerSecond
+        { get { return _heartWounds.GetPermanentDamagePerSecond(); } }
         internal float BruiseStrength { get { return _currentBruiseStrength; } }
         internal float BruiseTimeLeft { get { return Mathf.Max(0f, _bruiseExpires - Time.unscaledTime); } }
-        internal int FaceWounds { get { return _faceWounds.Count; } }
-        internal float EffectiveFaceWounds { get { return _faceWounds.Effective; } }
-        internal float ChestDecayStrength { get { return GetDecayStrength(_chestWounds.LastWoundTime); } }
-        internal float FaceDecayStrength { get { return GetDecayStrength(_faceWounds.LastWoundTime); } }
+        internal int LightWoundCount { get { return CountTreatableWounds(BleedType.Light); } }
+        internal int HeavyWoundCount { get { return CountTreatableWounds(BleedType.Heavy); } }
         internal bool TraumaDeathVoicePending { get { return _traumaDeathVoicePending; } }
         internal bool HeartDeathVoicePending
         { get { return _traumaDeathVoicePending && _heartDamageContext; } }
@@ -137,18 +271,6 @@ namespace TraumaCore
 
         internal void SetHeadDeathVoicePending(bool pending)
         { _headDeathVoicePending = pending; }
-        internal int StomachWounds
-        { get { return _bodyWounds.TryGetValue(EBodyPart.Stomach, out WoundTrack t) ? t.Count : 0; } }
-        internal int LimbWounds
-        {
-            get
-            {
-                int count = 0;
-                foreach (KeyValuePair<EBodyPart, WoundTrack> pair in _bodyWounds)
-                    if (pair.Key != EBodyPart.Stomach) count += pair.Value.Count;
-                return count;
-            }
-        }
         internal IList<DebugImpact> DebugImpacts { get { return _impacts; } }
         internal IList<DebugBloodParticle> DebugBloodParticles { get { return _bloodParticles; } }
 
@@ -157,20 +279,47 @@ namespace TraumaCore
             get
             {
                 if (_health == null) return 0f;
-                float treatableDps = _chestWounds.Effective * ChestDecayStrength;
-                if (_faceWounds.Active) treatableDps += _faceWounds.Effective * FaceDecayStrength;
+                float treatableDps = _chestWounds.GetDamagePerSecond();
+                if (_faceWounds.Active)
+                    treatableDps += _faceWounds.GetDamagePerSecond();
                 foreach (KeyValuePair<EBodyPart, WoundTrack> pair in _bodyWounds)
                 {
                     WoundTrack track = pair.Value;
-                    if (track.Count <= 0) continue;
-                    float primary = track.Effective * GetDecayStrength(track.LastWoundTime);
+                    if (!track.Active) continue;
+                    float primary = track.GetDamagePerSecond();
                     treatableDps += primary * (1f + GetShareFraction(pair.Key) *
                         GetLinkageMultiplier(pair.Key));
                 }
                 float dps = treatableDps * GetTreatableBleedMultiplier();
-                if (_heartWounds.Active) dps += _heartWounds.Effective;
+                if (_heartWounds.Active)
+                    dps += _heartWounds.GetPermanentDamagePerSecond();
                 return dps;
             }
+        }
+
+        private int CountTreatableWounds(BleedType type)
+        {
+            int count = _chestWounds.CountType(type) + _faceWounds.CountType(type);
+            foreach (KeyValuePair<EBodyPart, WoundTrack> pair in _bodyWounds)
+                count += pair.Value.CountType(type);
+            return count;
+        }
+
+        private int CountActiveWounds()
+        {
+            int count = _chestWounds.Count + _heartWounds.Count +
+                _faceWounds.Count;
+            foreach (KeyValuePair<EBodyPart, WoundTrack> pair in _bodyWounds)
+                count += pair.Value.Count;
+            return count;
+        }
+
+        private float GetBleedPresentationInterval()
+        {
+            float bleedCountProgress = Mathf.InverseLerp(
+                1f, MaximumPresentationBleedCount, CountActiveWounds());
+            return Mathf.Lerp(MaximumBleedPresentationInterval,
+                MinimumBleedPresentationInterval, bleedCountProgress);
         }
 
         internal void InitializeForPlayer(Player player)
@@ -189,92 +338,86 @@ namespace TraumaCore
                 _health.EffectRemovedEvent += OnEffectRemoved;
                 _health.EffectResidualEvent += OnEffectResidual;
                 _subscribed = true;
-                RestoreBruiseState();
             }
             enabled = HasRecurringWork();
         }
 
-        private void RestoreBruiseState()
+        internal void AddHeartWound(float multiplier)
         {
-            _bruiseUiEffect = _health?.FindExistingEffect<BruisedHealthEffect>(
-                EBodyPart.Chest);
-            if (_bruiseUiEffect == null)
-                return;
-
-            _bruiseStrength = Mathf.Clamp01(_bruiseUiEffect.Strength);
-            _currentBruiseStrength = _bruiseStrength;
-            _bruiseExpires = Time.unscaledTime + Mathf.Max(
-                0f,
-                _bruiseUiEffect.TimeLeft);
-        }
-
-        internal void AddChestWound(float originalBulletDamage)
-        {
-            if (!AddWound(_chestWounds, EBodyPart.Chest, originalBulletDamage,
-                OrganSystem.NormalBleedDivisor.Value)) return;
+            if (!AddWound(_heartWounds, EBodyPart.Chest, BleedType.Heavy,
+                multiplier, 1f, null, true)) return;
             if (OrganSystem.DebugLogging.Value)
-                TraumaLog.Info(string.Format(
-                    "[Trauma] Chest wound #{0}: interval={1:0.0}ms, added={2:0.00} HP/s, total={3:0.00} HP/s",
-                    _chestWounds.Count, _chestWounds.LastInterval * 1000f,
-                    _chestWounds.LastSeverity, _chestWounds.Effective));
+                TraumaLog.Info($"[Trauma] Permanent heavy heart wound added; " +
+                    $"multiplier={multiplier:F2}, " +
+                    $"woundDps={OrganSystem.HeartBaseBleedDamagePerSecond * multiplier:F1}, " +
+                    $"active heart wounds={_heartWounds.Count}");
         }
 
-        internal void AddHeartWound(float originalBulletDamage)
+        internal void AddTreatableWound(EBodyPart bodyPart, BleedType type,
+            float damageMultiplier, float durationMultiplier = 1f,
+            float eftPostArmorDamage = 0f, float directDamage = 0f,
+            float woundStrength = 1f)
         {
-            if (!AddWound(_heartWounds, EBodyPart.Chest, originalBulletDamage,
-                OrganSystem.HeartBleedDivisor.Value, 1f, true)) return;
-            _heartWoundUiEffect = _health.FindExistingEffect<HeartWoundHealthEffect>(
-                EBodyPart.Chest);
-            if (_heartWoundUiEffect == null)
-                _heartWoundUiEffect = _health.AddEffect<HeartWoundHealthEffect>(
-                    EBodyPart.Chest, 0f, null, null, null);
-            if (OrganSystem.DebugLogging.Value)
-                TraumaLog.Info(string.Format(
-                    "[Trauma] Heart wound #{0}: interval={1:0.0}ms, added={2:0.00} HP/s, total={3:0.00} HP/s",
-                    _heartWounds.Count, _heartWounds.LastInterval * 1000f,
-                    _heartWounds.LastSeverity, _heartWounds.Effective));
-        }
-
-        internal void AddFaceWound(float originalBulletDamage)
-        {
-            AddWound(_faceWounds, EBodyPart.Head, originalBulletDamage,
-                OrganSystem.HeadBleedDivisor.Value, 1f, false, true);
-        }
-
-        internal void AddTreatableWound(EBodyPart bodyPart, float originalBulletDamage)
-        {
+            WoundTrack wounds;
             switch (bodyPart)
             {
                 case EBodyPart.Head:
-                    AddFaceWound(originalBulletDamage);
+                    wounds = _faceWounds;
                     break;
                 case EBodyPart.Chest:
-                    AddChestWound(originalBulletDamage);
+                    wounds = _chestWounds;
+                    break;
+                case EBodyPart.Stomach:
+                case EBodyPart.LeftArm:
+                case EBodyPart.RightArm:
+                case EBodyPart.LeftLeg:
+                case EBodyPart.RightLeg:
+                    if (!_bodyWounds.TryGetValue(bodyPart, out wounds))
+                    {
+                        wounds = new WoundTrack();
+                        _bodyWounds.Add(bodyPart, wounds);
+                    }
                     break;
                 default:
-                    AddBodyWound(bodyPart, originalBulletDamage);
-                    break;
+                    return;
             }
+
+            bool isHead = bodyPart == EBodyPart.Head;
+            float sourceDamage = eftPostArmorDamage > 0f
+                ? eftPostArmorDamage
+                : ReferencePostArmorDamage;
+            float appliedDirectDamage = eftPostArmorDamage > 0f
+                ? Mathf.Max(0f, directDamage)
+                : sourceDamage * OrganSystem.DirectDamagePercent.Value *
+                    OrganSystem.GetTargetRules(_player).DamageMultiplier;
+            float fullWoundBleedBudget = Mathf.Max(0f,
+                sourceDamage * OrganSystem.FullWoundTotalDamageMultiplier.Value -
+                appliedDirectDamage);
+            float totalDamage = fullWoundBleedBudget /
+                EstimateLinkedDamageMultiplier(bodyPart) *
+                Mathf.Clamp01(woundStrength);
+            if (!AddWound(wounds, bodyPart, type, damageMultiplier,
+                durationMultiplier, totalDamage, false, isHead))
+                return;
+            if (OrganSystem.DebugLogging.Value)
+                TraumaLog.Info(string.Format(
+                    "[Trauma] {0} {1} wound added; active wounds={2}",
+                    bodyPart, type, wounds.Count));
         }
 
-        internal void AddFatalHeadBlood(float originalBulletDamage)
+        internal void AddFatalHeadBlood()
         {
-            float severity = Mathf.Max(0f, originalBulletDamage) /
-                Mathf.Max(0.01f, OrganSystem.HeadBleedDivisor.Value);
+            float severity = OrganSystem.HeavyBloodEffectStrength;
             AddDebugBloodSource(severity, false, true, EBodyPart.Head);
         }
 
-        internal void AddCorpseWound(EBodyPart bodyPart, float originalBulletDamage)
+        internal void AddCorpseWound(EBodyPart bodyPart)
         {
             if (_health == null) return;
             EnsureCorpseBloodReserve();
             if (_corpseBloodReserve <= 0f) return;
 
-            float divisor = bodyPart == EBodyPart.Head
-                ? OrganSystem.HeadBleedDivisor.Value
-                : OrganSystem.NormalBleedDivisor.Value;
-            float severity = Mathf.Clamp(Mathf.Max(0f, originalBulletDamage) /
-                Mathf.Max(0.01f, divisor) * 0.25f, 0.20f, 3f);
+            float severity = OrganSystem.HeavyBloodEffectStrength * 0.5f;
             AddDebugBloodSource(severity, false,
                 bodyPart == EBodyPart.Head, bodyPart);
             if (OrganSystem.DebugLogging.Value)
@@ -283,43 +426,67 @@ namespace TraumaCore
                     bodyPart, severity, _corpseBloodReserve));
         }
 
-        internal void AddBodyWound(EBodyPart bodyPart, float originalBulletDamage)
-        {
-            if (_health == null || (bodyPart != EBodyPart.Stomach &&
-                bodyPart != EBodyPart.LeftArm && bodyPart != EBodyPart.RightArm &&
-                bodyPart != EBodyPart.LeftLeg && bodyPart != EBodyPart.RightLeg)) return;
-            if (!_bodyWounds.TryGetValue(bodyPart, out WoundTrack track))
-            {
-                track = new WoundTrack();
-                _bodyWounds.Add(bodyPart, track);
-            }
-            float bodyScale = bodyPart == EBodyPart.Stomach ? 0.75f : 0.50f;
-            AddWound(track, bodyPart, originalBulletDamage,
-                OrganSystem.NormalBleedDivisor.Value, bodyScale);
-            if (OrganSystem.DebugLogging.Value)
-                TraumaLog.Info(string.Format(
-                    "[Trauma] {0} wound #{1}: effective={2:0.00} scale={3:0.00}",
-                    bodyPart, track.Count, track.Effective, bodyScale));
-        }
-
-        private bool AddWound(WoundTrack track, EBodyPart bodyPart, float originalDamage,
-            float divisor, float scale = 1f, bool heart = false, bool head = false)
+        private bool AddWound(WoundTrack track, EBodyPart bodyPart, BleedType type,
+            float damageMultiplier, float durationMultiplier,
+            float? totalDamage = null, bool heart = false, bool head = false)
         {
             if (_health == null || track == null) return false;
             enabled = true;
-            float severity = track.Add(originalDamage, divisor, scale);
-            AddDebugBloodSource(severity, heart, head, bodyPart);
+            float severity = track.Add(type, damageMultiplier,
+                durationMultiplier, totalDamage, heart);
+            int exitCount = 0;
+            if (_lastWoundTrajectory.HasPath)
+                for (int index = 0;
+                    index < _lastWoundTrajectory.Segments.Length; index++)
+                    if (_lastWoundTrajectory.Segments[index].Endpoint ==
+                        WoundPathEndpoint.Exit)
+                        exitCount++;
+            float sourceStrength = severity / (exitCount + 1f);
+            AddDebugBloodSource(sourceStrength, heart, head, bodyPart);
+            if (exitCount > 0)
+            {
+                Vector3 entry = _lastImpactPoint;
+                Vector3 direction = _lastImpactDirection;
+                for (int index = 0;
+                    index < _lastWoundTrajectory.Segments.Length; index++)
+                {
+                    WoundPathSegment segment =
+                        _lastWoundTrajectory.Segments[index];
+                    if (segment.Endpoint != WoundPathEndpoint.Exit)
+                        continue;
+                    _lastImpactPoint = segment.EndPoint;
+                    _lastImpactDirection = -segment.Direction;
+                    AddDebugBloodSource(sourceStrength, heart, head, bodyPart);
+                }
+                _lastImpactPoint = entry;
+                _lastImpactDirection = direction;
+            }
+            _lastWoundTrajectory = default;
             EnsureMarkers();
             return true;
         }
 
-        private static float GetDecayStrength(float lastWoundTime)
+        private static float GetDecayStrength(float lastWoundTime,
+            float duration)
         {
             if (lastWoundTime == float.MinValue) return 0f;
-            float duration = Mathf.Max(0.01f, OrganSystem.NonHeartDecayDuration.Value);
-            float progress = Mathf.Clamp01((Time.unscaledTime - lastWoundTime) / duration);
-            return Mathf.Lerp(1f, OrganSystem.NonHeartMinimumStrength, progress);
+            duration = Mathf.Max(0.01f, duration);
+            float elapsed = Time.unscaledTime - lastWoundTime;
+            if (elapsed >= duration) return 0f;
+
+            float rapidDuration = Mathf.Min(OrganSystem.RapidClotDuration, duration);
+            if (elapsed <= rapidDuration)
+                return Mathf.Lerp(1f, OrganSystem.RapidClotStrength,
+                    Mathf.Clamp01(elapsed / rapidDuration));
+
+            return Mathf.Lerp(OrganSystem.RapidClotStrength, 0f,
+                Mathf.Clamp01((elapsed - rapidDuration) /
+                    Mathf.Max(0.01f, duration - rapidDuration)));
         }
+
+        private static float GetDecayStrength(float lastWoundTime) =>
+            GetDecayStrength(lastWoundTime,
+                OrganSystem.NonHeartDecayDuration.Value);
 
         private float GetTreatableBleedMultiplier()
         {
@@ -328,17 +495,29 @@ namespace TraumaCore
                 : 1f;
         }
 
-        internal void RecordImpact(Vector3 hitPoint, Vector3 direction,
-            Vector3 intersection, bool heart, bool brain = false,
-            bool armorStopped = false, bool bone = false,
-            Vector3 boneIntersection = default(Vector3),
-            Transform hitTransform = null, bool cervicalSpine = false,
-            bool thoracicSpine = false)
+        internal void CaptureImpact(ImpactCapture capture)
         {
-            _lastImpactPoint = hitPoint;
-            _lastImpactDirection = direction.sqrMagnitude > 0.0001f
-                ? direction.normalized : Vector3.forward;
-            _lastImpactTransform = hitTransform;
+            Vector3 direction = capture.Direction.sqrMagnitude > 0.0001f
+                ? capture.Direction.normalized : Vector3.forward;
+            _lastImpactPoint = capture.HitPoint;
+            _lastImpactDirection = direction;
+            _lastWoundTrajectory = WoundTrajectory.Create(
+                capture.Wound, direction);
+            _lastImpactTransform = capture.HitTransform;
+            if (Plugin.EnableDeathScreenReport.Value)
+            {
+                Features.DeathScreen.DamageTracking.DeathScreenDamageTracker
+                    .CaptureTrajectory(
+                        _player?.Profile,
+                        _player,
+                        capture.BodyPart,
+                        capture.HitPoint,
+                        direction,
+                        capture.DamageType,
+                        capture.FireIndex,
+                        capture.ProjectileIndex,
+                        capture.Wound);
+            }
             if (!OrganSystem.DebugEsp.Value)
                 return;
 
@@ -346,16 +525,59 @@ namespace TraumaCore
             if (_impacts.Count >= 12) _impacts.RemoveAt(0);
             _impacts.Add(new DebugImpact
             {
-                HitPoint = hitPoint,
-                Direction = direction.sqrMagnitude > 0.0001f ? direction.normalized : Vector3.forward,
-                Intersection = intersection,
-                Heart = heart,
-                Brain = brain,
-                CervicalSpine = cervicalSpine,
-                ThoracicSpine = thoracicSpine,
-                Bone = bone,
-                BoneIntersection = boneIntersection,
-                ArmorStopped = armorStopped,
+                HitPoint = capture.HitPoint,
+                BodyPart = capture.BodyPart,
+                HitboxName = capture.HitboxName,
+                DepthReferenceName = capture.Wound.DepthReferenceName,
+                PenetrationModel = capture.Wound.PenetrationModel,
+                Direction = direction,
+                Intersection = capture.Intersection,
+                Heart = capture.Heart,
+                Brain = capture.Brain,
+                CervicalSpine = capture.CervicalSpine,
+                ThoracicSpine = capture.ThoracicSpine,
+                Ribcage = capture.Ribcage,
+                Skull = capture.Skull,
+                Trajectory = _lastWoundTrajectory,
+                ReferenceEntryPoint = capture.Wound.ReferenceEntryPoint,
+                ReferenceExitPoint = capture.Wound.ReferenceExitPoint,
+                TissueThickness = capture.Wound.TissueThickness,
+                PenetrationDepth = capture.Wound.PenetrationDepth,
+                ArmorPenetrationDepth = capture.Wound.ArmorPenetrationDepth,
+                KineticPenetrationDepth = capture.Wound.KineticPenetrationDepth,
+                ReferenceThickness = capture.Wound.ReferenceThickness,
+                TraveledDepth = capture.Wound.TraveledDepth,
+                CenterDepthRatio = capture.Wound.CenterDepthRatio,
+                DepthRatio = capture.Wound.DepthRatio,
+                BleedDamageMultiplier = capture.Wound.BleedDamageMultiplier,
+                BleedDurationMultiplier = capture.Wound.BleedDurationMultiplier,
+                OriginalPenetrationDepth = capture.OriginalPenetrationDepth,
+                OriginalImpactVelocity = capture.OriginalImpactVelocity,
+                BoneCollisionCount = capture.BoneCollisionCount,
+                FireIndex = capture.FireIndex,
+                ProjectileIndex = capture.ProjectileIndex,
+                HasFragmentation = capture.Wound.HasFragmentation,
+                FragmentPathCount = capture.Wound.HasFragmentation
+                    ? _lastWoundTrajectory.Segments.Length - 1 : 0,
+                FragmentationChance = OrganSystem.ForceFragmentation.Value
+                    ? 1f : capture.Wound.FragmentationChance,
+                FragmentationDepth = capture.Wound.FragmentationDepth,
+                FragmentDamageBonus = capture.FragmentDamageBonus,
+                ArmorPenetrationMargin = capture.ArmorPenetrationMargin,
+                ArmorFragmentationChanceBonus =
+                    capture.ArmorFragmentationChanceBonus,
+                ArmorPenetrationRetention =
+                    capture.ArmorPenetrationRetention,
+                FirstBoneDistance = capture.FirstBoneDistance,
+                BoneResistanceDepth = capture.BoneResistanceDepth,
+                ImpactVelocity = capture.Wound.ImpactVelocity,
+                BulletDiameter = capture.Wound.BulletDiameter,
+                WoundScore = capture.Wound.WoundScore,
+                BleedType = capture.Wound.BleedType,
+                PassedThrough = capture.Wound.PassedThrough,
+                Bone = capture.Bone,
+                BoneIntersection = capture.BoneIntersection,
+                ArmorStopped = capture.ArmorStopped,
                 Expires = Time.unscaledTime + 10f
             });
         }
@@ -369,16 +591,20 @@ namespace TraumaCore
             _currentBruiseStrength = _bruiseStrength;
             if (_health != null)
             {
-                _bruiseUiEffect = _health.FindExistingEffect<BruisedHealthEffect>(EBodyPart.Chest);
+                _bruiseUiEffect = _health.FindExistingEffect<
+                    ActiveHealthController.Pain>(EBodyPart.Chest);
                 if (_bruiseUiEffect == null)
-                    _bruiseUiEffect = _health.AddEffect<BruisedHealthEffect>(EBodyPart.Chest,
-                        0f, BruiseDuration, 0f, _bruiseStrength);
+                    _bruiseUiEffect = _health.AddEffect<
+                        ActiveHealthController.Pain>(EBodyPart.Chest,
+                            0f, BruiseDuration, 0f, _bruiseStrength);
                 else
                 {
                     _bruiseUiEffect.AddWorkTime(BruiseDuration, true);
                     if (_bruiseStrength > _bruiseUiEffect.Strength)
                         _bruiseUiEffect.SetStrength(_bruiseStrength);
                 }
+                NativeEffectLabels.MarkBruised(_bruiseUiEffect,
+                    BruiseDuration);
             }
             if (OrganSystem.DebugLogging.Value)
                 TraumaLog.Info(string.Format("[Bruised] +{0:0.00}, strength={1:0.00}, duration={2:0.0}s",
@@ -425,41 +651,31 @@ namespace TraumaCore
             if (_traumaAccumulator < TraumaStep) return;
             float deltaTime = _traumaAccumulator;
             _traumaAccumulator = 0f;
-            UpdateNativeBleedStrength();
+            ExpireClottedBleeds();
 
             float treatableMultiplier = GetTreatableBleedMultiplier();
-            float damagePerSecond = _chestWounds.Effective * ChestDecayStrength * treatableMultiplier;
-
-            if (_heartWounds.Active) damagePerSecond += _heartWounds.Effective;
-
-            if (_faceWounds.Active)
-            {
-                float faceDps = GetAdditionalFaceBleedDps() * treatableMultiplier;
-                if (faceDps > 0f)
-                    ApplyPrimaryAndShared(EBodyPart.Head, faceDps * deltaTime,
-                        DamageHelper.HeavyBleedingDamage);
-                if (!IsHealthAlive()) return;
-            }
+            ApplyTreatableWoundDamage(EBodyPart.Chest, _chestWounds,
+                deltaTime, treatableMultiplier);
+            if (!IsHealthAlive()) return;
+            ApplyTreatableWoundDamage(EBodyPart.Head, _faceWounds,
+                deltaTime, treatableMultiplier);
+            if (!IsHealthAlive()) return;
 
             foreach (KeyValuePair<EBodyPart, WoundTrack> pair in _bodyWounds)
             {
-                WoundTrack track = pair.Value;
-                if (track.Count <= 0) continue;
-                float decay = GetDecayStrength(track.LastWoundTime);
-                float bodyDps = track.Effective * decay * treatableMultiplier;
-                ApplyPrimaryAndShared(pair.Key, bodyDps * deltaTime,
-                    DamageHelper.LightBleedingDamage);
+                ApplyTreatableWoundDamage(pair.Key, pair.Value,
+                    deltaTime, treatableMultiplier);
                 if (!IsHealthAlive()) return;
             }
 
-            float damage = damagePerSecond * deltaTime;
-            if (damage > 0f)
+            float heartDamage = _heartWounds.GetPermanentDamagePerSecond() * deltaTime;
+            if (heartDamage > 0f)
             {
-                _heartDamageContext = _heartWounds.Active;
+                _heartDamageContext = true;
                 try
                 {
-                    ApplyPrimaryAndShared(EBodyPart.Chest, damage,
-                        _heartWounds.Active ? DamageHelper.HeavyBleedingDamage : DamageHelper.LightBleedingDamage);
+                    ApplyPrimaryAndShared(EBodyPart.Chest, heartDamage,
+                        DamageHelper.HeavyBleedingDamage);
                 }
                 finally
                 {
@@ -469,6 +685,23 @@ namespace TraumaCore
 
             if (!IsHealthAlive()) return;
             EnsureMarkers();
+            UpdateNativeBleedStrength();
+        }
+
+        private void ApplyTreatableWoundDamage(EBodyPart bodyPart,
+            WoundTrack wounds, float deltaTime, float multiplier)
+        {
+            if (wounds == null || !wounds.Active) return;
+            float heavy = wounds.GetDamagePerSecond(BleedType.Heavy);
+            float light = wounds.GetDamagePerSecond() - heavy;
+            if (light > 0f)
+                ApplyPrimaryAndShared(bodyPart,
+                    light * multiplier * deltaTime,
+                    DamageHelper.LightBleedingDamage);
+            if (IsHealthAlive() && heavy > 0f)
+                ApplyPrimaryAndShared(bodyPart,
+                    heavy * multiplier * deltaTime,
+                    DamageHelper.HeavyBleedingDamage);
         }
 
         private void AddDebugBloodSource(float strength, bool heart, bool head,
@@ -480,33 +713,8 @@ namespace TraumaCore
             enabled = true;
             Transform attachment = _lastImpactTransform != null
                 ? _lastImpactTransform : _player.gameObject.transform;
-            int visualKey = ((int)bodyPart << 1) | (heart ? 1 : 0);
-            int priorHits = _bloodVisualHitCounts.TryGetValue(visualKey, out int hits)
-                ? hits : 0;
-            _bloodVisualHitCounts[visualKey] = priorHits + 1;
-            float visualStrength = strength * Mathf.Pow(0.75f, priorHits);
+            float visualStrength = strength;
             float now = Time.unscaledTime;
-
-            for (int i = 0; i < _bloodSources.Count; i++)
-                if (_bloodSources[i].BodyPart == bodyPart &&
-                    _bloodSources[i].Heart == heart)
-                    _bloodSources[i].Created = now;
-
-            for (int i = 0; i < _bloodSources.Count; i++)
-            {
-                DebugBloodSource existing = _bloodSources[i];
-                if (existing.Attachment == null || existing.Heart != heart || existing.Head != head)
-                    continue;
-                Vector3 existingWorld = existing.Attachment.TransformPoint(existing.LocalPosition);
-                if ((existingWorld - _lastImpactPoint).sqrMagnitude > 0.0064f) continue;
-                existing.Strength += visualStrength;
-                existing.Created = now;
-                existing.Attachment = attachment;
-                existing.LocalPosition = attachment.InverseTransformPoint(_lastImpactPoint);
-                existing.LocalDirection = (Quaternion.Inverse(attachment.rotation) *
-                    -_lastImpactDirection).normalized;
-                return;
-            }
 
             if (_bloodSources.Count >= 24)
             {
@@ -728,6 +936,15 @@ namespace TraumaCore
             return Mathf.Lerp(1f, 0.25f, ratio);
         }
 
+        private float EstimateLinkedDamageMultiplier(EBodyPart source)
+        {
+            EBodyPart[] targets = GetSharedTargets(source);
+            if (targets == null || targets.Length == 0)
+                return 1f;
+            return 1f + GetShareFraction(source) *
+                GetLinkageMultiplier(source);
+        }
+
         private void ApplyPrimaryAndShared(EBodyPart source, float damage, DamageInfo damageInfo)
         {
             if (damage <= 0f || !IsHealthAlive()) return;
@@ -787,7 +1004,8 @@ namespace TraumaCore
 
             float now = Time.unscaledTime;
             bool allowPresentation = now >= _nextPresentationTime;
-            if (allowPresentation) _nextPresentationTime = now + PresentationInterval;
+            if (allowPresentation)
+                _nextPresentationTime = now + GetBleedPresentationInterval();
 
             bool previousInside = TraumaPresentationContext.InsideTraumaDamage;
             bool previousAllowance = TraumaPresentationContext.AllowPresentation;
@@ -860,6 +1078,11 @@ namespace TraumaCore
             { EBodyPart.Chest, EBodyPart.LeftLeg, EBodyPart.RightLeg };
         private static readonly EBodyPart[] ArmSharedTargets = { EBodyPart.Chest };
         private static readonly EBodyPart[] LegSharedTargets = { EBodyPart.Stomach };
+        private static readonly EBodyPart[] TreatableBodyParts =
+        {
+            EBodyPart.Stomach, EBodyPart.LeftArm, EBodyPart.RightArm,
+            EBodyPart.LeftLeg, EBodyPart.RightLeg
+        };
 
         private void EnsureMarkers()
         {
@@ -869,95 +1092,222 @@ namespace TraumaCore
             {
                 if (_heartWounds.Active && _health.FindExistingEffect<IHeavyBleeding>(EBodyPart.Chest) == null)
                     _health.DoBleed<ActiveHealthController.HeavyBleeding>(EBodyPart.Chest);
-                else if (_chestWounds.Active &&
-                    _health.FindExistingEffect<ILightBleeding>(EBodyPart.Chest) == null)
-                    _health.DoBleed<ActiveHealthController.LightBleeding>(EBodyPart.Chest);
-                if (_faceWounds.Active &&
-                    _health.FindExistingEffect<IHeavyBleeding>(EBodyPart.Head) == null)
-                    _health.DoBleed<ActiveHealthController.HeavyBleeding>(EBodyPart.Head);
+                if (_chestWounds.Active && !_heartWounds.Active)
+                    EnsureWoundMarker(EBodyPart.Chest, _chestWounds.StrongestType);
+                if (_faceWounds.Active)
+                    EnsureWoundMarker(EBodyPart.Head, _faceWounds.StrongestType);
                 foreach (KeyValuePair<EBodyPart, WoundTrack> pair in _bodyWounds)
-                    if (pair.Value.Count > 0 &&
-                        _health.FindExistingEffect<ILightBleeding>(pair.Key) == null)
-                        _health.DoBleed<ActiveHealthController.LightBleeding>(pair.Key);
+                    if (pair.Value.Active)
+                        EnsureWoundMarker(pair.Key, pair.Value.StrongestType);
             }
             finally { _addingMarker = false; }
+        }
+
+        private void EnsureWoundMarker(EBodyPart bodyPart, BleedType type)
+        {
+            bool needsHeavy = type == BleedType.Heavy;
+            ActiveHealthController.LightBleeding light =
+                _health.FindExistingEffect<ActiveHealthController.LightBleeding>(bodyPart);
+            ActiveHealthController.HeavyBleeding heavy =
+                _health.FindExistingEffect<ActiveHealthController.HeavyBleeding>(bodyPart);
+            if (needsHeavy)
+            {
+                if (light != null) light.ForceRemove();
+                if (heavy == null)
+                    _health.DoBleed<ActiveHealthController.HeavyBleeding>(bodyPart);
+                return;
+            }
+            if (heavy != null) heavy.ForceRemove();
+            if (light == null)
+                _health.DoBleed<ActiveHealthController.LightBleeding>(bodyPart);
         }
 
         private void UpdateNativeBleedStrength()
         {
             if (_health == null) return;
+            float treatableMultiplier = GetTreatableBleedMultiplier();
             ActiveHealthController.LightBleeding chestBleed =
                 _health.FindExistingEffect<ActiveHealthController.LightBleeding>(EBodyPart.Chest);
-            if (chestBleed != null) chestBleed.float_15 = 0f;
+            if (chestBleed != null)
+            {
+                chestBleed.float_15 = 0f;
+                NativeEffectLabels.UpdateBleedPresentation(chestBleed,
+                    _chestWounds.GetTimeLeft(BleedType.Light),
+                    _chestWounds.GetDamagePerSecond(BleedType.Light) *
+                    treatableMultiplier);
+            }
 
             ActiveHealthController.HeavyBleeding heartBleed =
                 _health.FindExistingEffect<ActiveHealthController.HeavyBleeding>(EBodyPart.Chest);
-            if (heartBleed != null) heartBleed.float_15 = 0f;
+            if (heartBleed != null)
+            {
+                heartBleed.float_15 = 0f;
+                float timeLeft = _heartWounds.Active
+                    ? float.PositiveInfinity
+                    : _chestWounds.GetTimeLeft(BleedType.Heavy);
+                float damagePerSecond =
+                    _heartWounds.GetPermanentDamagePerSecond() +
+                    _chestWounds.GetDamagePerSecond(BleedType.Heavy) *
+                    treatableMultiplier;
+                NativeEffectLabels.UpdateBleedPresentation(heartBleed,
+                    timeLeft, damagePerSecond);
+            }
 
+            ActiveHealthController.LightBleeding faceLightBleed =
+                _health.FindExistingEffect<ActiveHealthController.LightBleeding>(EBodyPart.Head);
+            if (faceLightBleed != null)
+            {
+                faceLightBleed.float_15 = 0f;
+                NativeEffectLabels.UpdateBleedPresentation(faceLightBleed,
+                    _faceWounds.GetTimeLeft(BleedType.Light),
+                    _faceWounds.GetDamagePerSecond(BleedType.Light) *
+                    treatableMultiplier);
+            }
             ActiveHealthController.HeavyBleeding faceBleed =
                 _health.FindExistingEffect<ActiveHealthController.HeavyBleeding>(EBodyPart.Head);
-            if (faceBleed != null) faceBleed.float_15 = 0f;
+            if (faceBleed != null)
+            {
+                faceBleed.float_15 = 0f;
+                NativeEffectLabels.UpdateBleedPresentation(faceBleed,
+                    _faceWounds.GetTimeLeft(BleedType.Heavy),
+                    _faceWounds.GetDamagePerSecond(BleedType.Heavy) *
+                    treatableMultiplier);
+            }
             foreach (KeyValuePair<EBodyPart, WoundTrack> pair in _bodyWounds)
             {
                 ActiveHealthController.LightBleeding bleed =
                     _health.FindExistingEffect<ActiveHealthController.LightBleeding>(pair.Key);
                 if (bleed != null)
+                {
                     bleed.float_15 = 0f;
+                    NativeEffectLabels.UpdateBleedPresentation(bleed,
+                        pair.Value.GetTimeLeft(BleedType.Light),
+                        pair.Value.GetDamagePerSecond(BleedType.Light) *
+                        treatableMultiplier);
+                }
+                ActiveHealthController.HeavyBleeding heavyBleed =
+                    _health.FindExistingEffect<ActiveHealthController.HeavyBleeding>(pair.Key);
+                if (heavyBleed != null)
+                {
+                    heavyBleed.float_15 = 0f;
+                    NativeEffectLabels.UpdateBleedPresentation(heavyBleed,
+                        pair.Value.GetTimeLeft(BleedType.Heavy),
+                        pair.Value.GetDamagePerSecond(BleedType.Heavy) *
+                        treatableMultiplier);
+                }
             }
-        }
-
-        private float GetAdditionalFaceBleedDps()
-        {
-            if (_health == null || !_faceWounds.Active) return 0f;
-            return _faceWounds.Effective * FaceDecayStrength;
         }
 
         private void OnEffectRemoved(IHealthEffect effect)
         {
             if (_addingMarker || effect == null) return;
             if (effect is ILightBleeding || effect is IHeavyBleeding)
-                ClearTreatableBleeds(effect);
+                AccelerateTreatableBleed(effect);
         }
 
         private void OnEffectResidual(IHealthEffect effect)
         {
             if (_addingMarker || effect == null) return;
             if (effect is ILightBleeding || effect is IHeavyBleeding)
-                ClearTreatableBleeds(effect);
+                AccelerateTreatableBleed(effect);
         }
 
-        private void ClearTreatableBleeds(IHealthEffect removedEffect)
+        private void AccelerateTreatableBleed(IHealthEffect removedEffect)
         {
-            if (_health == null || _addingMarker || removedEffect == null) return;
+            if (_health == null || _addingMarker || removedEffect == null ||
+                !_acceleratedBleedEffects.Add(removedEffect)) return;
 
             EBodyPart bodyPart = removedEffect.BodyPart;
 
-            if (bodyPart == EBodyPart.Chest && removedEffect is IHeavyBleeding && _heartWounds.Active)
+            if (bodyPart == EBodyPart.Chest &&
+                removedEffect is IHeavyBleeding && _heartWounds.Active)
+            {
+                enabled = true;
+                if (OrganSystem.DebugLogging.Value)
+                    TraumaLog.Info(
+                        "[Trauma] In-raid treatment cannot close a heart " +
+                        "wound; restoring its native Heavy Bleeding marker");
                 return;
+            }
 
-            bool hadWound;
+            WoundTrack wound;
             switch (bodyPart)
             {
                 case EBodyPart.Chest:
-                    hadWound = _chestWounds.Clear();
+                    wound = _chestWounds;
                     break;
                 case EBodyPart.Head:
-                    hadWound = _faceWounds.Clear();
+                    wound = _faceWounds;
                     break;
                 default:
-                    hadWound = _bodyWounds.Remove(bodyPart);
+                    _bodyWounds.TryGetValue(bodyPart, out wound);
                     break;
             }
 
-            if (!hadWound) return;
+            if (wound == null || !wound.Active) return;
+
+            float clottingProgress = removedEffect is IHeavyBleeding ? 0.99f : 0.90f;
+            wound.AdvanceClotting(clottingProgress);
+            EnsureMarkers();
+
+            if (OrganSystem.DebugLogging.Value)
+                TraumaLog.Info(string.Format(
+                    "[Trauma] Treatment advanced clotting on {0} by {1:0}%",
+                    bodyPart, clottingProgress * 100f));
+        }
+
+        private void ExpireClottedBleeds()
+        {
+            if (_health == null) return;
+            bool hadChestWounds = _chestWounds.Active;
+            _chestWounds.RemoveClottedWounds();
+            if (hadChestWounds && !_chestWounds.Active)
+                RemoveClottedBleedMarker(EBodyPart.Chest,
+                    FindTreatableBleedMarker(EBodyPart.Chest));
+            bool hadFaceWounds = _faceWounds.Active;
+            _faceWounds.RemoveClottedWounds();
+            if (hadFaceWounds && !_faceWounds.Active)
+                RemoveClottedBleedMarker(EBodyPart.Head,
+                    FindTreatableBleedMarker(EBodyPart.Head));
+
+            for (int i = 0; i < TreatableBodyParts.Length; i++)
+            {
+                EBodyPart bodyPart = TreatableBodyParts[i];
+                if (!_bodyWounds.TryGetValue(bodyPart, out WoundTrack wound)) continue;
+                wound.RemoveClottedWounds();
+                if (wound.Active) continue;
+                RemoveClottedBleedMarker(bodyPart,
+                    FindTreatableBleedMarker(bodyPart));
+                _bodyWounds.Remove(bodyPart);
+            }
+        }
+
+        private ActiveHealthController.Effect FindTreatableBleedMarker(
+            EBodyPart bodyPart)
+        {
+            ActiveHealthController.LightBleeding light =
+                _health.FindExistingEffect<ActiveHealthController.LightBleeding>(bodyPart);
+            return light != null ? light :
+                _health.FindExistingEffect<ActiveHealthController.HeavyBleeding>(bodyPart);
+        }
+
+        private void RemoveClottedBleedMarker(EBodyPart bodyPart,
+            ActiveHealthController.Effect marker)
+        {
 
             for (int i = _bloodSources.Count - 1; i >= 0; i--)
                 if (!_bloodSources[i].Heart && _bloodSources[i].BodyPart == bodyPart)
                     _bloodSources.RemoveAt(i);
-            _bloodVisualHitCounts.Remove((int)bodyPart << 1);
+
+            _addingMarker = true;
+            try
+            {
+                if (marker != null) marker.ForceRemove();
+            }
+            finally { _addingMarker = false; }
 
             if (OrganSystem.DebugLogging.Value)
-                TraumaLog.Info($"[Trauma] Healed all treatable bleed stacks on {bodyPart}");
+                TraumaLog.Info($"[Trauma] Treatable bleed clotted on {bodyPart}");
         }
 
         private void ClearLinkedTreatableBleeds()
@@ -971,11 +1321,6 @@ namespace TraumaCore
                 _bodyWounds.Clear();
                 for (int i = _bloodSources.Count - 1; i >= 0; i--)
                     if (!_bloodSources[i].Heart) _bloodSources.RemoveAt(i);
-                _bloodVisualHitCounts.Clear();
-                if (_heartWounds.Active)
-                    _bloodVisualHitCounts[((int)EBodyPart.Chest << 1) | 1] =
-                        Mathf.Max(1, _heartWounds.Count);
-
                 List<IHealthEffect> effects = new List<IHealthEffect>(_health.GetAllActiveEffects());
                 for (int i = 0; i < effects.Count; i++)
                     if ((effects[i] is ILightBleeding || effects[i] is IHeavyBleeding) &&
@@ -1000,6 +1345,7 @@ namespace TraumaCore
             }
             _subscribed = false;
             _bloodLossBlockerWasActive = false;
+            _acceleratedBleedEffects.Clear();
         }
 
         private void OnDestroy()
@@ -1010,7 +1356,7 @@ namespace TraumaCore
             _appliedRestorePenalty = 0f;
             _bloodSources.Clear();
             _bloodParticles.Clear();
-            _bloodVisualHitCounts.Clear();
+            _heartWounds.Clear();
             Unsubscribe();
         }
     }

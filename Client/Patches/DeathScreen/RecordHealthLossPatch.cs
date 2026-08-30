@@ -17,21 +17,20 @@ namespace TraumaCore.Patches.DeathScreen
                 new[] { typeof(EBodyPart), typeof(float), typeof(DamageInfo) });
 
         [PatchPrefix]
-        private static void PatchPrefix(
+        private static void CaptureHealthLoss(
             HealthStatisticsManager __instance,
             EBodyPart bodyPart,
             float diff,
             DamageInfo damageInfo)
         {
-            if (diff >= 0f)
+            if (!Plugin.EnableDeathScreenReport.Value || diff >= 0f)
                 return;
 
             DeathScreenDamageTracker.CaptureHealthLoss(
                 __instance.Profile,
                 bodyPart,
                 -diff,
-                damageInfo,
-                __instance.HealthController);
+                damageInfo);
         }
     }
 }

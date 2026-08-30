@@ -3,23 +3,35 @@ using EFT;
 using EFT.HealthSystem;
 using HarmonyLib;
 using SPT.Reflection.Patching;
+using TraumaCore.Features.WoundInspection;
 using UnityEngine;
 
 namespace TraumaCore.Patches.HealthEffects
 {
-    public sealed class BruiseMovementPatch : ModulePatch
+    public sealed class MovementSpeedPenaltyPatch : ModulePatch
     {
+        private const float CorpseDragSpeedMultiplier = 0.5f;
+
         protected override MethodBase GetTargetMethod() =>
             AccessTools.Method(typeof(MovementContext),
                 nameof(MovementContext.ClampSpeed));
 
         [PatchPostfix]
-        private static void PatchPostfix(Player ____player, ref float __result)
+        private static void ApplyMovementSpeedPenalties(Player ____player,
+            ref float __result)
         {
-            if (____player == null || __result <= 0f) return;
+            if (____player == null || __result <= 0f)
+                return;
+
+            float speedMultiplier = 1f;
             TraumaController trauma = ____player.GetComponent<TraumaController>();
-            if (trauma == null || trauma.BruiseStrength <= 0f) return;
-            __result *= Mathf.Lerp(1f, 0.85f, trauma.BruiseStrength);
+            if (trauma != null && trauma.BruiseStrength > 0f)
+                speedMultiplier *= Mathf.Lerp(1f, 0.85f,
+                    trauma.BruiseStrength);
+            if (____player.IsYourPlayer &&
+                CorpseDragController.HasActiveDrag)
+                speedMultiplier *= CorpseDragSpeedMultiplier;
+            __result *= speedMultiplier;
         }
     }
 
@@ -30,7 +42,7 @@ namespace TraumaCore.Patches.HealthEffects
                 nameof(Player.UpdateSpeedLimitByHealth));
 
         [PatchPostfix]
-        private static void PatchPostfix(Player __instance)
+        private static void ApplySpinalFractureSpeedLimit(Player __instance)
         {
             if (__instance == null || __instance.ActiveHealthController == null)
                 return;
@@ -38,9 +50,12 @@ namespace TraumaCore.Patches.HealthEffects
             bool spinalFracture =
                 health.FindExistingEffect<IFracture>(EBodyPart.Chest) != null ||
                 health.FindExistingEffect<IFracture>(EBodyPart.Stomach) != null;
-            if (!spinalFracture) return;
+            if (!spinalFracture)
+                return;
 
-            if (health.FindExistingEffect<IPainKiller>() != null) return;
+            if (health.FindExistingEffect<IPainKiller>() != null)
+                return;
+
             __instance.MovementContext.EnableSprint(false);
             __instance.AddStateSpeedLimit(0.2f, Player.ESpeedLimit.HealthCondition);
         }

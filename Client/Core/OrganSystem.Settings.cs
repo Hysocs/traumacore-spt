@@ -6,11 +6,14 @@ namespace TraumaCore
 {
     internal static partial class OrganSystem
     {
-        internal static ConfigEntry<bool> Enabled, DebugEsp, DebugLogging, BloodEffects;
+        internal static ConfigEntry<bool> Enabled, DebugEsp, DebugLogging,
+            ForceFragmentation, BloodEffects;
         internal static ConfigEntry<float> DebugEspRange, DirectDamagePercent,
-            NonHeartDecayDuration;
-        internal static ConfigEntry<float> NormalBleedDivisor, HeadBleedDivisor,
-            HeartBleedDivisor;
+            FullWoundTotalDamageMultiplier, NonHeartDecayDuration;
+        internal static ConfigEntry<float> BoneEspOpacity, HeartEspOpacity,
+            BrainEspOpacity, RibcageEspOpacity;
+        private static ConfigEntry<float> RibcageMinimumDepthSetting,
+            SkullMinimumDepthSetting;
         internal static ConfigEntry<float> OneBlackedRetention, TwoBlackedRetention,
             ThreePlusBlackedRetention;
         internal static ConfigEntry<float> ArmLinkageMultiplier, LegLinkageMultiplier,
@@ -20,10 +23,13 @@ namespace TraumaCore
             PlayerCervicalSpineHitbox, PlayerThoracicSpineHitbox;
         internal static ConfigEntry<bool> ScavBrainHitbox, ScavHeartHitbox,
             ScavCervicalSpineHitbox, ScavThoracicSpineHitbox;
-        internal static ConfigEntry<bool> PlayerBodyTrauma, PlayerArmorPenetration,
-            ScavBodyTrauma, ScavArmorPenetration;
+        internal static ConfigEntry<bool> PlayerBodyTrauma, ScavBodyTrauma;
 
-        internal const float NonHeartMinimumStrength = 0.10f;
+        internal const float RapidClotDuration = 3f;
+        internal const float RapidClotStrength = 0.15f;
+        internal const float LightBleedDamagePerSecond = 1f;
+        internal const float HeartBaseBleedDamagePerSecond = 10f;
+        internal const float HeavyBloodEffectStrength = 6f;
         internal const float BloodLossBlockerDamageMultiplier = 0.50f;
         internal static OrganDefinition Heart { get; private set; }
         internal static OrganDefinition Brain { get; private set; }
@@ -49,26 +55,58 @@ namespace TraumaCore
         private static void BindGeneral(ConfigFile config)
         {
             Enabled = config.Bind("General", "Enabled", true,
-                Ui("Enable organ damage zones", "01 - General", "Enable Overhaul", 100));
-            DirectDamagePercent = config.Bind("Damage", "DirectDamagePercentV2", 0.35f,
+                Ui("Enable anatomical damage, wounds, bleeding, linkage, and fractures",
+                    "01 - Feature Toggles", "Anatomical Trauma / Bleeding", 100));
+            DirectDamagePercent = config.Bind("Damage", "DirectDamagePercentV2", 0.7537557f,
                 Ui("Immediate bullet damage fraction before trauma", "02 - Global Damage",
                     "Direct Bullet Damage", 100, new AcceptableValueRange<float>(0f, 1f)));
+            FullWoundTotalDamageMultiplier = config.Bind("Damage",
+                "FullWoundTotalDamageMultiplier", 1.15f,
+                Ui("Target total damage from a full-depth bullet wound after its natural bleed completes, relative to EFT post-armor damage",
+                    "02 - Global Damage", "Full Wound Total Damage", 95,
+                    new AcceptableValueRange<float>(1f, 1.5f)));
             BloodEffects = config.Bind("Visuals", "WorldBloodEffects", true,
                 Ui("Render procedural world-space blood particles from trauma wounds",
-                    "07 - Debug & Visuals", "World Blood Effects", 100));
-            DebugEsp = config.Bind("Debug", "OrganESP", false,
-                Ui("Render debug organ outlines", "07 - Debug & Visuals", "Organ Hitbox ESP", 90));
+                    "01 - Feature Toggles", "Procedural World Blood", 20));
+            ForceFragmentation = config.Bind("Debug", "ForceFragmentation", false,
+                Ui("Force every eligible bullet wound to fragment for testing",
+                    "09 - Debugging", "Force Fragmentation (100%)", 100));
+            DebugEsp = config.Bind("Debug", "OrganESP", true,
+                Ui("Render debug organ outlines", "09 - Debugging",
+                    "Organ Hitbox ESP", 90));
             DebugEspRange = config.Bind("Debug", "OrganESPRange", 100f,
-                Ui("Maximum debug ESP rendering distance in metres", "07 - Debug & Visuals",
+                Ui("Maximum debug ESP rendering distance in metres", "09 - Debugging",
                     "ESP Culling Range", 80, new AcceptableValueRange<float>(5f, 500f)));
-            DebugLogging = config.Bind("Debug", "HitLogging", true,
+            HeartEspOpacity = BindEspOpacity(config, "HeartOpacity", 0.90f,
+                "Heart Opacity", 79);
+            BrainEspOpacity = BindEspOpacity(config, "BrainOpacity", 0.80f,
+                "Brain Opacity", 78);
+            BoneEspOpacity = BindEspOpacity(config, "BoneOpacity", 0.50f,
+                "Bone Opacity", 77);
+            RibcageEspOpacity = BindEspOpacity(config, "RibcageOpacity", 0.35f,
+                "Ribcage Opacity", 76);
+            DebugLogging = config.Bind("Debug", "HitLogging", false,
                 Ui("Write TraumaCore diagnostic, warning, and error messages to the log",
-                    "07 - Debug & Visuals", "Logging", 70));
+                    "09 - Debugging", "Logging", 70));
+            RibcageMinimumDepthSetting = config.Bind("Debug Ribcage",
+                "MinimumChestDepth", 0.015f,
+                Ui("Chest travel required before the path counts as striking ribs (metres)",
+                    "09 - Debugging", "Ribcage Minimum Depth", 60,
+                    new AcceptableValueRange<float>(0.005f, 0.05f)));
+            SkullMinimumDepthSetting = config.Bind("Debug Skull",
+                "MinimumHeadDepth", 0.006f,
+                Ui("Head travel required before the path counts as striking the skull (metres)",
+                    "09 - Debugging", "Skull Minimum Depth", 59,
+                    new AcceptableValueRange<float>(0.002f, 0.02f)));
         }
+
+        internal static float RibcageMinimumDepth =>
+            RibcageMinimumDepthSetting.Value;
+        internal static float SkullMinimumDepth => SkullMinimumDepthSetting.Value;
 
         private static void BindTargetRules(ConfigFile config)
         {
-            PlayerDamageMultiplier = config.Bind("Target Balance", "PlayerDamageMultiplier", 0.25f,
+            PlayerDamageMultiplier = config.Bind("Target Balance", "PlayerDamageMultiplier", 1f,
                 Ui("Global multiplier for all trauma damage applied to human players",
                     "02 - Global Damage", "Player Damage Multiplier", 90,
                     new AcceptableValueRange<float>(0f, 5f)));
@@ -79,14 +117,10 @@ namespace TraumaCore
 
             PlayerBodyTrauma = BindTargetSystem(config, false, "CustomBodyTrauma", true,
                 "Use Custom Body Trauma", "Use custom wounds, organs, linkage and fractures on players", 120);
-            PlayerArmorPenetration = BindTargetSystem(config, false, "CustomArmorPenetration", true,
-                "Use Custom Armor Penetration", "Use the custom binary penetration calculation on player armor", 110);
             ScavBodyTrauma = BindTargetSystem(config, true, "CustomBodyTrauma", true,
                 "Use Custom Body Trauma", "Use custom wounds, organs, linkage and fractures on AI/scavs", 120);
-            ScavArmorPenetration = BindTargetSystem(config, true, "CustomArmorPenetration", true,
-                "Use Custom Armor Penetration", "Use the custom binary penetration calculation on AI/scav armor", 110);
 
-            PlayerBrainHitbox = BindHitbox(config, false, "Player Hitboxes", "Brain", true,
+            PlayerBrainHitbox = BindHitbox(config, false, "Player Hitboxes", "Brain", false,
                 "Brain (Fatal)", "Enable fatal brain hits on players", 100);
             PlayerHeartHitbox = BindHitbox(config, false, "Player Hitboxes", "Heart", false,
                 "Heart (Delayed Fatal)", "Enable heart wounds on players", 90);
@@ -114,7 +148,8 @@ namespace TraumaCore
             string description, int order)
         {
             string configSection = scav ? "Scav Systems" : "Player Systems";
-            string uiSection = scav ? "04 - Scav / AI Hitboxes" : "03 - Player Hitboxes";
+            string uiSection = scav
+                ? "04 - Scav / AI Systems" : "03 - Player Systems";
             return config.Bind(configSection, configKey, defaultValue,
                 Ui(description, uiSection, displayName, order));
         }
@@ -123,38 +158,46 @@ namespace TraumaCore
             string configSection, string configKey, bool defaultValue,
             string displayName, string description, int order)
         {
-            string uiSection = scav ? "04 - Scav / AI Hitboxes" : "03 - Player Hitboxes";
+            string uiSection = scav
+                ? "04 - Scav / AI Systems" : "03 - Player Systems";
             return config.Bind(configSection, configKey, defaultValue,
                 Ui(description, uiSection, displayName, order));
         }
 
         private static void BindBleedBalance(ConfigFile config)
         {
-            NormalBleedDivisor = config.Bind("Damage", "NormalBleedDamageDivisor", 6.5f,
-                Ui("Bullet damage divisor for chest, stomach and limb bleed DPS",
-                    "05 - Bleed Balance", "Body Bleed Divisor", 100,
-                    new AcceptableValueRange<float>(1f, 30f)));
-            HeadBleedDivisor = config.Bind("Damage", "HeadBleedDamageDivisor", 30f,
-                Ui("Bullet damage divisor for non-brain head bleed DPS",
-                    "05 - Bleed Balance", "Face Bleed Divisor", 90,
-                    new AcceptableValueRange<float>(1f, 30f)));
-            HeartBleedDivisor = config.Bind("Damage", "HeartBleedDamageDivisorV2", 1f,
-                Ui("Bullet damage divisor for permanent heart bleed DPS",
-                    "05 - Bleed Balance", "Heart Bleed Divisor", 80,
-                    new AcceptableValueRange<float>(0.5f, 20f)));
-            NonHeartDecayDuration = config.Bind("Bleeding", "NonHeartDecayDuration", 5f,
-                Ui("Seconds after the last non-heart hit to decay to minimum strength",
-                    "05 - Bleed Balance", "Non-Heart Bleed Decay", 70,
-                    new AcceptableValueRange<float>(0.5f, 30f)));
+            NonHeartDecayDuration = config.Bind("Bleeding", "NaturalClotDurationV2", 30f,
+                Ui("Seconds after the last non-heart hit until the bleed clots completely",
+                    "05 - Bleed Balance", "Non-Heart Clot Time", 70,
+                    new AcceptableValueRange<float>(3f, 120f)));
+        }
+
+        private static ConfigEntry<float> BindEspOpacity(ConfigFile config,
+            string key, float defaultValue, string displayName, int order)
+        {
+            return config.Bind("Visuals", key, defaultValue,
+                Ui("Opacity used by the organ ESP renderer",
+                    "09 - Debugging", displayName, order,
+                    new AcceptableValueRange<float>(0f, 1f)));
+        }
+
+        internal static float GetBleedDecayArea(float duration)
+        {
+            duration = Mathf.Max(0.01f, duration);
+            float rapidDuration = Mathf.Min(RapidClotDuration, duration);
+            float rapidArea = rapidDuration * (1f + RapidClotStrength) * 0.5f;
+            float slowArea = (duration - rapidDuration) *
+                RapidClotStrength * 0.5f;
+            return Mathf.Max(0.01f, rapidArea + slowArea);
         }
 
         private static void BindLinkage(ConfigFile config)
         {
-            OneBlackedRetention = BindLinkageValue(config, "OneBlackedRetention", 0.85f,
+            OneBlackedRetention = BindLinkageValue(config, "OneBlackedRetention", 0.9532864f,
                 "1 Blacked Part Retention", "Damage retained after crossing one blacked part", 100, 1f);
-            TwoBlackedRetention = BindLinkageValue(config, "TwoBlackedRetention", 0.60f,
+            TwoBlackedRetention = BindLinkageValue(config, "TwoBlackedRetention", 0.801878f,
                 "2 Blacked Parts Retention", "Damage retained after crossing two blacked parts", 90, 1f);
-            ThreePlusBlackedRetention = BindLinkageValue(config, "ThreePlusBlackedRetention", 0.30f,
+            ThreePlusBlackedRetention = BindLinkageValue(config, "ThreePlusBlackedRetention", 0.501878f,
                 "3+ Blacked Parts Retention", "Damage retained after crossing three or more blacked parts", 80, 1f);
             ArmLinkageMultiplier = BindLinkageValue(config, "ArmLinkageMultiplierV2", 0.20f,
                 "Arm Linkage", "Multiplier for damage shared or bypassed outward from an arm", 70, 2f);
@@ -180,12 +223,12 @@ namespace TraumaCore
                 new Color(1f, 0.1f, 0.15f, 0.95f));
             Brain = new OrganDefinition("BRAIN 1", OrganAnchor.Head, OrganShape.Ellipsoid,
                 new Vector3(-0.1013986f, 0.0267507f, -0.0019f),
-                new Vector3(0.114989f, 0.1787899f, 0.12747f),
+                new Vector3(0.114989f, 0.1787899f, 0.12747f) * 0.95f,
                 Vector3.zero,
                 new Color(1f, 0.2f, 0.8f, 0.95f));
             LowerBrain = new OrganDefinition("BRAIN 2", OrganAnchor.Head, OrganShape.Ellipsoid,
                 new Vector3(-0.07322957f, -0.001197184f, -0.0019f),
-                new Vector3(0.124507f, 0.1056338f, 0.1098591f),
+                new Vector3(0.124507f, 0.1056338f, 0.1098591f) * 0.95f,
                 new Vector3(0f, 0f, -90f),
                 new Color(0.75f, 0.12f, 1f, 0.95f));
         }
@@ -203,10 +246,10 @@ namespace TraumaCore
             if (player == null) return default;
             return player.IsAI
                 ? new TargetRules(ScavDamageMultiplier.Value, ScavBodyTrauma.Value,
-                    ScavArmorPenetration.Value, ScavBrainHitbox.Value, ScavHeartHitbox.Value,
+                    ScavBrainHitbox.Value, ScavHeartHitbox.Value,
                     ScavCervicalSpineHitbox.Value, ScavThoracicSpineHitbox.Value)
                 : new TargetRules(PlayerDamageMultiplier.Value, PlayerBodyTrauma.Value,
-                    PlayerArmorPenetration.Value, PlayerBrainHitbox.Value, PlayerHeartHitbox.Value,
+                    PlayerBrainHitbox.Value, PlayerHeartHitbox.Value,
                     PlayerCervicalSpineHitbox.Value, PlayerThoracicSpineHitbox.Value);
         }
     }

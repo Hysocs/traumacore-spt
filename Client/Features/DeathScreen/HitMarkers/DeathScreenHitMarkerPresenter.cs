@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using System;
 using System.Linq;
 using EFT;
 using EFT.HealthSystem;
@@ -17,6 +18,28 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
 {
     internal static class DeathScreenHitMarkerPresenter
     {
+        private sealed class StaticHitCallout
+        {
+            internal EBodyPart BodyPart;
+            internal Transform Anchor;
+            internal Vector3 LocalEntry;
+            internal Vector3 LocalDirection;
+            internal float TraveledDepth;
+            internal bool PassedThrough;
+            internal int Sequence;
+            internal bool IsFragmentBranch;
+            internal bool HasFragmentBranches;
+            internal StaticHitCallout Parent;
+            internal RectTransform EntryMark;
+            internal RectTransform StartArrow;
+            internal RectTransform ApproachLine;
+            internal RectTransform DepthLine;
+            internal RectTransform EndPoint;
+            internal RectTransform ExitMark;
+            internal RectTransform Label;
+            internal TextMeshProUGUI Text;
+        }
+
         private const float BulletHoleSizePixels = 7f;
         private const float LabelWidthPixels = 300f;
         private const float MinimumLabelWidthPixels = 190f;
@@ -51,14 +74,360 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
             screen.StartCoroutine(
                 CreateMarkersWhenModelReady(
                     screen,
+                    screen.gameObject,
                     modelView,
                     screen._bodyPartLabel,
                     activeProfile,
                     damageHistory));
         }
 
+        internal static void ShowStaticCorpsePreview(
+            MonoBehaviour host,
+            GameObject activeRoot,
+            Camera previewCamera,
+            RawImage previewImage,
+            Transform anchorRoot,
+            Profile profile,
+            Func<bool> shouldShowTrajectories)
+        {
+            if (host == null || activeRoot == null || previewCamera == null ||
+                previewImage == null || anchorRoot == null || profile == null)
+                return;
+            host.StartCoroutine(CreateStaticCorpseMarkers(
+                activeRoot, previewCamera, previewImage, anchorRoot, profile,
+                shouldShowTrajectories));
+        }
+
+        private static IEnumerator CreateStaticCorpseMarkers(
+            GameObject activeRoot,
+            Camera previewCamera,
+            RawImage previewImage,
+            Transform anchorRoot,
+            Profile profile,
+            Func<bool> shouldShowTrajectories)
+        {
+            yield return null;
+            Dictionary<EBodyPart, Transform> anchors = new();
+            foreach (EBodyPart bodyPart in BodyPartAnchorResolver.BodyParts)
+            {
+                Transform anchor = BodyPartAnchorResolver.Find(anchorRoot, bodyPart);
+                if (anchor != null)
+                    anchors.Add(bodyPart, anchor);
+            }
+
+            GameObject container = new GameObject(
+                "TraumaCoreHitMarkers", typeof(RectTransform));
+            container.transform.SetParent(previewImage.rectTransform, false);
+            RectTransform markerRect = (RectTransform)container.transform;
+            markerRect.anchorMin = Vector2.zero;
+            markerRect.anchorMax = Vector2.one;
+            markerRect.offsetMin = Vector2.zero;
+            markerRect.offsetMax = Vector2.zero;
+            ModelPreview preview = new ModelPreview
+            {
+                Camera = previewCamera,
+                Image = previewImage,
+                Container = markerRect
+            };
+            List<StaticHitCallout> callouts = CreateStaticHitCallouts(
+                profile, anchors, markerRect, includeLabels: true);
+            while (activeRoot != null && activeRoot.activeInHierarchy)
+            {
+                bool shouldShow = shouldShowTrajectories?.Invoke() ?? true;
+                container.SetActive(shouldShow);
+                if (shouldShow)
+                    UpdateStaticHitCallouts(preview, callouts);
+                yield return null;
+            }
+        }
+
+        private static List<StaticHitCallout> CreateStaticHitCallouts(
+            Profile profile,
+            IReadOnlyDictionary<EBodyPart, Transform> anchors,
+            RectTransform container,
+            bool includeLabels)
+        {
+            List<StaticHitCallout> callouts = new();
+            foreach (EBodyPart bodyPart in BodyPartAnchorResolver.BodyParts)
+            {
+                if (!anchors.TryGetValue(bodyPart, out Transform anchor) ||
+                    !DeathScreenDamageTracker.TryGetRecordedDamage(
+                        profile, bodyPart, out var recordedDamage) ||
+                    recordedDamage.DirectHits <= 0)
+                    continue;
+
+                for (int impactIndex = 0;
+                    impactIndex < recordedDamage.Impacts.Count;
+                    impactIndex++)
+                {
+                    var impact = recordedDamage.Impacts[impactIndex];
+                    if (!impact.HasWoundTrajectory)
+                        continue;
+                    WoundPathSegment primarySegment =
+                        impact.Trajectory.Segments[0];
+                    Color color = ResolveImpactColor(impact);
+                    RectTransform entryMark = CreateTrajectoryGraphic<LastHitXGraphic>(
+                        container, $"Entry_{bodyPart}_{impactIndex}", 12f, Color.white);
+                    RectTransform startArrow = CreateTrajectoryGraphic<TrajectoryArrowGraphic>(
+                        container, $"Direction_{bodyPart}_{impactIndex}", 12f, color);
+                    RectTransform approachLine = CreateTrajectoryLine(
+                        container, $"Approach_{bodyPart}_{impactIndex}", color, 1.5f);
+                    RectTransform depthLine = CreateTrajectoryLine(
+                        container, $"Depth_{bodyPart}_{impactIndex}", color, 3f);
+                    RectTransform endPoint = CreateTrajectoryGraphic<BulletHoleGraphic>(
+                        container, $"End_{bodyPart}_{impactIndex}", 8f, color);
+                    RectTransform exitMark = CreateTrajectoryGraphic<LastHitXGraphic>(
+                        container, $"Exit_{bodyPart}_{impactIndex}", 12f, color);
+                    RectTransform label;
+                    TextMeshProUGUI text;
+                    if (includeLabels)
+                    {
+                        label = CreateTrajectoryLabel(
+                            container, bodyPart, impact.TraveledDepth,
+                            impact.PassedThrough, color, out text);
+                    }
+                    else
+                    {
+                        label = CreateHiddenTrajectoryGraphic(container);
+                        text = null;
+                    }
+                    StaticHitCallout primary = new StaticHitCallout
+                    {
+                        BodyPart = bodyPart,
+                        Anchor = anchor,
+                        LocalEntry = primarySegment.StartPoint,
+                        LocalDirection = primarySegment.Direction,
+                        TraveledDepth = primarySegment.TraveledDepth,
+                        PassedThrough = primarySegment.Endpoint ==
+                            WoundPathEndpoint.Exit,
+                        Sequence = impact.Sequence,
+                        HasFragmentBranches = impact.Trajectory.HasBranches,
+                        EntryMark = entryMark,
+                        StartArrow = startArrow,
+                        ApproachLine = approachLine,
+                        DepthLine = depthLine,
+                        EndPoint = endPoint,
+                        ExitMark = exitMark,
+                        Label = label,
+                        Text = text
+                    };
+                    callouts.Add(primary);
+                    for (int segmentIndex = 1;
+                        segmentIndex < impact.Trajectory.Segments.Length;
+                        segmentIndex++)
+                    {
+                        WoundPathSegment fragment =
+                            impact.Trajectory.Segments[segmentIndex];
+                        RectTransform fragmentApproach = CreateTrajectoryLine(
+                            container,
+                            $"Fragment_{bodyPart}_{impactIndex}_{segmentIndex}",
+                            color, 2f);
+                        RectTransform fragmentEnd =
+                            CreateTrajectoryGraphic<BulletHoleGraphic>(container,
+                                $"FragmentEnd_{bodyPart}_{impactIndex}_{segmentIndex}",
+                                8f, color);
+                        RectTransform fragmentExit =
+                            CreateTrajectoryGraphic<LastHitXGraphic>(container,
+                                $"FragmentExit_{bodyPart}_{impactIndex}_{segmentIndex}",
+                                12f, color);
+                        callouts.Add(new StaticHitCallout
+                        {
+                            BodyPart = bodyPart,
+                            Anchor = anchor,
+                            LocalEntry = fragment.StartPoint,
+                            LocalDirection = fragment.Direction,
+                            TraveledDepth = fragment.TraveledDepth,
+                            PassedThrough = fragment.Endpoint ==
+                                WoundPathEndpoint.Exit,
+                            Sequence = impact.Sequence,
+                            IsFragmentBranch = true,
+                            Parent = primary,
+                            EntryMark = CreateHiddenTrajectoryGraphic(container),
+                            StartArrow = CreateHiddenTrajectoryGraphic(container),
+                            ApproachLine = fragmentApproach,
+                            DepthLine = CreateHiddenTrajectoryGraphic(container),
+                            EndPoint = fragmentEnd,
+                            ExitMark = fragmentExit,
+                            Label = CreateHiddenTrajectoryGraphic(container),
+                            Text = null
+                        });
+                    }
+                }
+            }
+            TraumaLog.Info(
+                $"[WoundInspection] Created {callouts.Count} hit callout(s)");
+            return callouts;
+        }
+
+        private static void UpdateStaticHitCallouts(
+            ModelPreview preview,
+            IReadOnlyList<StaticHitCallout> callouts)
+        {
+            Rect bounds = preview.Container.rect;
+            for (int index = 0; index < callouts.Count; index++)
+            {
+                StaticHitCallout callout = callouts[index];
+                Vector3 entryWorld = callout.Anchor.TransformPoint(callout.LocalEntry);
+                Vector3 directionWorld = callout.Anchor.TransformDirection(
+                    callout.LocalDirection).normalized;
+                const float approachDistance = 0.28f;
+                Vector3 approachWorld = callout.Parent != null
+                    ? ResolveCalloutEnd(callout.Parent)
+                    : entryWorld - directionWorld * approachDistance;
+                Vector3 depthWorld = entryWorld + directionWorld * callout.TraveledDepth;
+                bool isFragment = callout.IsFragmentBranch;
+                Vector3 displayedEndWorld = !isFragment && callout.PassedThrough
+                    ? depthWorld + directionWorld * approachDistance
+                    : depthWorld;
+                Vector3 approachViewport = preview.Camera.WorldToViewportPoint(approachWorld);
+                Vector3 entryViewport = preview.Camera.WorldToViewportPoint(entryWorld);
+                Vector3 exitViewport = preview.Camera.WorldToViewportPoint(depthWorld);
+                Vector3 depthViewport = preview.Camera.WorldToViewportPoint(displayedEndWorld);
+                bool isVisible = entryViewport.z > 0f;
+                bool hasDepth = callout.TraveledDepth > 0f;
+                callout.EntryMark.gameObject.SetActive(isVisible && !isFragment);
+                callout.StartArrow.gameObject.SetActive(
+                    isVisible && !isFragment);
+                callout.ApproachLine.gameObject.SetActive(isVisible);
+                callout.DepthLine.gameObject.SetActive(
+                    isVisible && hasDepth && !isFragment);
+                callout.EndPoint.gameObject.SetActive(
+                    isVisible && hasDepth && !callout.PassedThrough &&
+                    !callout.HasFragmentBranches);
+                callout.ExitMark.gameObject.SetActive(
+                    isVisible && hasDepth && callout.PassedThrough);
+                callout.Label.gameObject.SetActive(
+                    isVisible && !isFragment && callout.Text != null);
+                if (!isVisible)
+                    continue;
+
+                Vector2 approachPoint = ConvertViewportToLocal(
+                    preview.Image, approachViewport);
+                Vector2 entryPoint = ConvertViewportToLocal(preview.Image, entryViewport);
+                Vector2 exitPoint = ConvertViewportToLocal(preview.Image, exitViewport);
+                Vector2 depthPoint = ConvertViewportToLocal(preview.Image, depthViewport);
+                float side = entryPoint.x < bounds.center.x ? -1f : 1f;
+                Vector2 labelPoint = depthPoint + new Vector2(
+                    side * 20f, 16f + ((index % 3) - 1) * 14f);
+                labelPoint.x = Mathf.Clamp(labelPoint.x,
+                    bounds.xMin + 78f, bounds.xMax - 78f);
+                labelPoint.y = Mathf.Clamp(labelPoint.y,
+                    bounds.yMin + 18f, bounds.yMax - 18f);
+
+                callout.StartArrow.anchoredPosition = approachPoint;
+                callout.EntryMark.anchoredPosition = entryPoint;
+                callout.EndPoint.anchoredPosition = depthPoint;
+                callout.ExitMark.anchoredPosition = exitPoint;
+                UpdateCalloutLine(
+                    callout.ApproachLine,
+                    approachPoint,
+                    isFragment ? depthPoint : entryPoint);
+                UpdateCalloutLine(callout.DepthLine, entryPoint, depthPoint);
+                Vector2 approachDirection = entryPoint - approachPoint;
+                callout.StartArrow.localRotation = Quaternion.Euler(0f, 0f,
+                    Mathf.Atan2(approachDirection.y, approachDirection.x) * Mathf.Rad2Deg);
+                if (!isFragment && callout.Text != null)
+                {
+                    callout.Label.pivot = side < 0f
+                        ? new Vector2(1f, 0.5f)
+                        : new Vector2(0f, 0.5f);
+                    callout.Text.alignment = side < 0f
+                        ? TextAlignmentOptions.MidlineRight
+                        : TextAlignmentOptions.MidlineLeft;
+                    callout.Label.anchoredPosition = labelPoint;
+                }
+            }
+        }
+
+        private static Vector3 ResolveCalloutEnd(StaticHitCallout callout)
+        {
+            Vector3 entry = callout.Anchor.TransformPoint(callout.LocalEntry);
+            Vector3 direction = callout.Anchor.TransformDirection(
+                callout.LocalDirection).normalized;
+            return entry + direction * callout.TraveledDepth;
+        }
+
+        private static RectTransform CreateTrajectoryLine(
+            RectTransform container, string name, Color color, float width)
+        {
+            GameObject lineObject = new GameObject(
+                name, typeof(RectTransform), typeof(Image));
+            lineObject.transform.SetParent(container, false);
+            RectTransform line = lineObject.GetComponent<RectTransform>();
+            line.anchorMin = line.anchorMax = new Vector2(0.5f, 0.5f);
+            line.pivot = new Vector2(0f, 0.5f);
+            line.sizeDelta = new Vector2(1f, width);
+            Image image = lineObject.GetComponent<Image>();
+            image.color = color;
+            image.raycastTarget = false;
+            return line;
+        }
+
+        private static RectTransform CreateHiddenTrajectoryGraphic(
+            RectTransform container)
+        {
+            GameObject graphicObject = new GameObject(
+                "HiddenTrajectoryGraphic", typeof(RectTransform));
+            graphicObject.transform.SetParent(container, false);
+            graphicObject.SetActive(false);
+            return graphicObject.GetComponent<RectTransform>();
+        }
+
+        private static RectTransform CreateTrajectoryGraphic<T>(
+            RectTransform container, string name, float size, Color color)
+            where T : MaskableGraphic
+        {
+            GameObject graphicObject = new GameObject(
+                name, typeof(RectTransform), typeof(T));
+            graphicObject.transform.SetParent(container, false);
+            RectTransform rect = graphicObject.GetComponent<RectTransform>();
+            rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
+            rect.sizeDelta = Vector2.one * size;
+            T graphic = graphicObject.GetComponent<T>();
+            graphic.color = color;
+            graphic.raycastTarget = false;
+            return rect;
+        }
+
+        private static RectTransform CreateTrajectoryLabel(
+            RectTransform container, EBodyPart bodyPart, float depth,
+            bool passedThrough, Color color, out TextMeshProUGUI text)
+        {
+            GameObject labelObject = new GameObject(
+                $"TrajectoryText_{bodyPart}", typeof(RectTransform),
+                typeof(TextMeshProUGUI));
+            labelObject.transform.SetParent(container, false);
+            RectTransform label = labelObject.GetComponent<RectTransform>();
+            label.anchorMin = label.anchorMax = new Vector2(0.5f, 0.5f);
+            label.sizeDelta = new Vector2(155f, 26f);
+            text = labelObject.GetComponent<TextMeshProUGUI>();
+            text.text = depth <= 0f
+                ? $"{bodyPart}  DEPTH N/A"
+                : $"{bodyPart}  {depth * 100f:F0} cm" +
+                    (passedThrough ? "  THROUGH" : string.Empty);
+            text.fontSize = 12f;
+            text.fontStyle = FontStyles.Bold;
+            text.color = color;
+            text.raycastTarget = false;
+            Outline outline = labelObject.AddComponent<Outline>();
+            outline.effectColor = new Color(0f, 0f, 0f, 0.95f);
+            outline.effectDistance = new Vector2(1f, -1f);
+            return label;
+        }
+
+        private static void UpdateCalloutLine(
+            RectTransform line, Vector2 start, Vector2 end)
+        {
+            Vector2 direction = end - start;
+            line.anchoredPosition = start;
+            line.sizeDelta = new Vector2(direction.magnitude, 1.5f);
+            line.localRotation = Quaternion.Euler(
+                0f, 0f, Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg);
+        }
+
         private static IEnumerator CreateMarkersWhenModelReady(
-            SessionResultExitStatus screen,
+            MonoBehaviour coroutineHost,
+            GameObject activeRoot,
             PlayerModelView modelView,
             TextMeshProUGUI originalLabel,
             Profile activeProfile,
@@ -103,6 +472,10 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                     anchorsByBodyPart,
                     modelPreview);
 
+            List<StaticHitCallout> trajectoryCallouts = CreateStaticHitCallouts(
+                activeProfile, anchorsByBodyPart, modelPreview.Container,
+                includeLabels: false);
+
             if (bodyPartMarkers.Count == 0)
             {
                 TraumaLog.Warning(
@@ -111,18 +484,21 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
             }
 
             TraumaLog.Info(
-                $"[DeathScreenHitMarkers] Created {bodyPartMarkers.Count} body-part labels");
+                $"[DeathScreenHitMarkers] Created {bodyPartMarkers.Count} body-part " +
+                $"labels and {trajectoryCallouts.Count} trajectory callouts");
 
             if (originalLabel != null)
                 originalLabel.gameObject.SetActive(false);
 
-            while (screen != null &&
+            while (coroutineHost != null &&
+                   activeRoot != null &&
                    modelPreview.Image != null &&
                    modelPreview.Camera != null &&
                    modelPreview.Container != null &&
-                   screen.gameObject.activeInHierarchy)
+                   activeRoot.activeInHierarchy)
             {
                 UpdateMarkerPositions(modelPreview, bodyPartMarkers);
+                UpdateStaticHitCallouts(modelPreview, trajectoryCallouts);
                 yield return null;
             }
         }
@@ -240,9 +616,10 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
 
             foreach (EBodyPart bodyPart in BodyPartAnchorResolver.BodyParts)
             {
-                damageHistory.BodyParts.TryGetValue(
+                List<DamageStats> bodyPartDamageHistory = null;
+                damageHistory?.BodyParts?.TryGetValue(
                     bodyPart,
-                    out List<DamageStats> bodyPartDamageHistory);
+                    out bodyPartDamageHistory);
                 bool hasRecordedDamage =
                     DeathScreenDamageTracker.TryGetRecordedDamage(
                         activeProfile,
@@ -309,7 +686,8 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                     out DeathScreenDamageTracker.BodyPartDamageRecord recordedDamage))
                 {
                     foreach (DeathScreenDamageTracker.BulletImpactRecord impact in recordedDamage.Impacts)
-                        marker.RecordedImpacts.Add(impact);
+                        if (impact.HasWoundTrajectory)
+                            marker.RecordedImpacts.Add(impact);
                 }
 
                 CreateMarkerVisuals(modelPreview.Container, marker);
@@ -398,13 +776,6 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
             RectTransform container,
             BodyPartMarker marker)
         {
-            for (int i = 0; i < marker.RecordedImpacts.Count; i++)
-                marker.Impacts.Add(CreateBulletImpactVisual(
-                    container,
-                    marker,
-                    marker.RecordedImpacts[i],
-                    i));
-
             GameObject labelObject =
                 new GameObject(
                     $"Label_{marker.BodyPart}",
@@ -467,7 +838,7 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
             DeathScreenDamageTracker.BulletImpactRecord impact,
             int index)
         {
-            Color color = ResolveImpactColor(marker.Color, impact.DamageType, index);
+            Color color = ResolveImpactColor(impact);
             GameObject dotObject = new GameObject(
                 $"Hit_{marker.BodyPart}_{index + 1}",
                 typeof(RectTransform));
@@ -790,14 +1161,25 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
             };
 
         private static Color ResolveImpactColor(
-            Color bodyPartColor,
-            EDamageType damageType,
-            int index)
+            DeathScreenDamageTracker.BulletImpactRecord impact)
         {
-            Color baseColor = Color.Lerp(ResolveDamageColor(damageType), bodyPartColor, 0.4f);
-            Color.RGBToHSV(baseColor, out float hue, out float saturation, out float value);
-            hue = Mathf.Repeat(hue + index * 0.11f, 1f);
-            return Color.HSVToRGB(hue, Mathf.Max(0.7f, saturation), Mathf.Max(0.9f, value));
+            Color shallowColor = new Color(0.15f, 1f, 0.2f);
+            Color fullPenetrationColor = new Color(1f, 0.12f, 0.08f);
+            if (impact.PassedThrough)
+                return fullPenetrationColor;
+
+            const float shallowDepth = 0.1f;
+            float fullPenetrationDepth = Mathf.Max(
+                shallowDepth + 0.001f,
+                impact.Penetration.ReferenceThickness);
+            float penetrationProgress = Mathf.InverseLerp(
+                shallowDepth,
+                fullPenetrationDepth,
+                impact.TraveledDepth);
+            return Color.Lerp(
+                shallowColor,
+                fullPenetrationColor,
+                penetrationProgress);
         }
 
         private static Color ResolveDamageColor(EDamageType type) =>

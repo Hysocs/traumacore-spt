@@ -22,7 +22,8 @@ namespace TraumaCore.Patches.Trauma
         [PatchPrefix]
         private static bool PatchPrefix()
         {
-            return !TraumaPresentationContext.InsideTraumaDamage ||
+            return !Plugin.EnableTraumaPresentation.Value ||
+                   !TraumaPresentationContext.InsideTraumaDamage ||
                    TraumaPresentationContext.AllowPresentation;
         }
     }
@@ -36,7 +37,8 @@ namespace TraumaCore.Patches.Trauma
         [PatchPrefix]
         private static bool PatchPrefix()
         {
-            return !TraumaPresentationContext.InsideTraumaDamage ||
+            return !Plugin.EnableTraumaPresentation.Value ||
+                   !TraumaPresentationContext.InsideTraumaDamage ||
                    TraumaPresentationContext.AllowPresentation;
         }
     }

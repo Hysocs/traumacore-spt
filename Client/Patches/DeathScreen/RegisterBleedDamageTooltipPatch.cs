@@ -25,6 +25,9 @@ namespace TraumaCore.Patches.DeathScreen
             DamagePanel __instance,
             DamagePanel.BodyPartDamageList __result)
         {
+            if (!Plugin.EnableDeathScreenReport.Value)
+                return;
+
             EBodyPart bodyPart = (EBodyPart)BodyPartField.GetValue(__instance);
             IHealthController healthController =
                 HealthControllerField.GetValue(__instance) as IHealthController;

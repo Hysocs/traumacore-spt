@@ -63,4 +63,20 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
             vertexHelper.AddTriangle(firstVertex, firstVertex + 2, firstVertex + 3);
         }
     }
+
+    internal sealed class TrajectoryArrowGraphic : MaskableGraphic
+    {
+        protected override void OnPopulateMesh(VertexHelper vertexHelper)
+        {
+            vertexHelper.Clear();
+            Rect bounds = rectTransform.rect;
+            vertexHelper.AddVert(
+                new Vector2(bounds.xMax, bounds.center.y), color, Vector2.zero);
+            vertexHelper.AddVert(
+                new Vector2(bounds.xMin, bounds.yMax), color, Vector2.zero);
+            vertexHelper.AddVert(
+                new Vector2(bounds.xMin, bounds.yMin), color, Vector2.zero);
+            vertexHelper.AddTriangle(0, 1, 2);
+        }
+    }
 }

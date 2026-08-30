@@ -10,6 +10,7 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
 {
     internal static class DeathScreenDamageTracker
     {
+        private const int MaximumImpactsPerBodyPart = 64;
         private static int _nextImpactSequence;
         private static readonly Dictionary<string, int> LatestImpactSequenceByProfileId =
             new();
@@ -33,8 +34,7 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
             Profile profile,
             EBodyPart bodyPart,
             float healthLost,
-            DamageInfo damageInfo,
-            IHealthController healthController)
+            DamageInfo damageInfo)
         {
             if (profile == null || string.IsNullOrEmpty(profile.Id) || healthLost <= 0f)
                 return;
@@ -61,17 +61,6 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
                 return;
             }
 
-            if (damageType.IsWeaponInduced() &&
-                healthController is ActiveHealthController activeHealthController &&
-                activeHealthController.Player != null)
-            {
-                CaptureBulletImpact(
-                    profile,
-                    activeHealthController.Player,
-                    bodyPart,
-                    damageInfo);
-            }
-
             recordedDamage.DirectDamage += healthLost;
             recordedDamage.LastDirectType = damageType;
         }
@@ -80,10 +69,12 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
             Profile profile,
             Player victim,
             EBodyPart bodyPart,
-            DamageInfo damageInfo)
+            DamageInfo damageInfo,
+            int projectileIndex = int.MinValue)
         {
             if (profile == null || string.IsNullOrEmpty(profile.Id) ||
-                victim == null || !damageInfo.DamageType.IsWeaponInduced())
+                victim == null || damageInfo.Damage <= 0f ||
+                !damageInfo.DamageType.IsWeaponInduced())
                 return;
 
             BodyPartDamageRecord recordedDamage = FindOrCreateBodyPartDamage(
@@ -107,8 +98,12 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
             for (int index = 0; index < recordedDamage.Impacts.Count; index++)
             {
                 BulletImpactRecord impact = recordedDamage.Impacts[index];
-                if (impact.FireIndex != damageInfo.FireIndex ||
-                    (impact.LocalPoint - localPoint).sqrMagnitude >= 0.000001f)
+                if (impact.FireIndex != damageInfo.FireIndex)
+                    continue;
+                bool isSameProjectile = projectileIndex != int.MinValue
+                    ? impact.ProjectileIndex == projectileIndex
+                    : (impact.LocalPoint - localPoint).sqrMagnitude < 0.000001f;
+                if (!isSameProjectile)
                     continue;
 
                 isDuplicate = true;
@@ -119,9 +114,18 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
                 int sequence = ++_nextImpactSequence;
                 recordedDamage.Impacts.Add(new BulletImpactRecord(
                     localPoint,
+                    anchor.InverseTransformDirection(
+                        damageInfo.Direction).normalized,
+                    0f,
+                    false,
                     damageInfo.DamageType,
                     damageInfo.FireIndex,
-                    sequence));
+                    projectileIndex,
+                    sequence,
+                    default,
+                    default));
+                if (recordedDamage.Impacts.Count > MaximumImpactsPerBodyPart)
+                    recordedDamage.Impacts.RemoveAt(0);
                 LatestImpactSequenceByProfileId[profile.Id] = sequence;
                 recordedDamage.DirectHits++;
                 if (OrganSystem.DebugLogging.Value)
@@ -130,6 +134,82 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
                         $"fireIndex={damageInfo.FireIndex}, anchor={anchor.name}, " +
                         $"local=({localPoint.x:F3}, {localPoint.y:F3}, {localPoint.z:F3})");
             }
+        }
+
+        internal static void CaptureTrajectory(
+            Profile profile,
+            Player victim,
+            EBodyPart bodyPart,
+            Vector3 entryPoint,
+            Vector3 direction,
+            EDamageType damageType,
+            int fireIndex,
+            int projectileIndex,
+            WoundBallistics wound)
+        {
+            if (profile == null || string.IsNullOrEmpty(profile.Id) || victim == null)
+                return;
+
+            BodyPartDamageRecord damage = FindOrCreateBodyPartDamage(
+                profile.Id, bodyPart);
+
+            Transform anchor = BodyPartAnchorResolver.Find(
+                victim.Transform.Original, bodyPart);
+            if (anchor == null)
+                return;
+
+            Vector3 localEntry = anchor.InverseTransformPoint(entryPoint);
+            int closestIndex = -1;
+            float closestDistance = float.MaxValue;
+            for (int index = 0; index < damage.Impacts.Count; index++)
+            {
+                if (damage.Impacts[index].FireIndex != fireIndex ||
+                    damage.Impacts[index].ProjectileIndex != projectileIndex)
+                    continue;
+                float distance = (damage.Impacts[index].LocalPoint - localEntry).sqrMagnitude;
+                if (distance >= closestDistance)
+                    continue;
+                closestDistance = distance;
+                closestIndex = index;
+            }
+            Vector3 localDirection =
+                anchor.InverseTransformDirection(direction).normalized;
+            HitPenetrationRecord penetration = new HitPenetrationRecord(wound);
+            WoundTrajectory trajectory = WoundTrajectory.Create(
+                wound, direction).ToLocal(anchor);
+            if (closestIndex < 0 || closestDistance > 0.01f)
+            {
+                int sequence = ++_nextImpactSequence;
+                damage.Impacts.Add(new BulletImpactRecord(
+                    localEntry,
+                    localDirection,
+                    Mathf.Max(0f, wound.TraveledDepth),
+                    wound.PassedThrough,
+                    damageType,
+                    fireIndex,
+                    projectileIndex,
+                    sequence,
+                    penetration,
+                    trajectory));
+                if (damage.Impacts.Count > MaximumImpactsPerBodyPart)
+                    damage.Impacts.RemoveAt(0);
+                LatestImpactSequenceByProfileId[profile.Id] = sequence;
+                damage.DirectHits++;
+                return;
+            }
+
+            BulletImpactRecord impact = damage.Impacts[closestIndex];
+            damage.Impacts[closestIndex] = new BulletImpactRecord(
+                impact.LocalPoint,
+                localDirection,
+                Mathf.Max(0f, wound.TraveledDepth),
+                wound.PassedThrough,
+                impact.DamageType,
+                impact.FireIndex,
+                impact.ProjectileIndex,
+                impact.Sequence,
+                penetration,
+                trajectory);
         }
 
         internal static bool TryGetRecordedDamage(
@@ -206,20 +286,73 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
         internal readonly struct BulletImpactRecord
         {
             public readonly Vector3 LocalPoint;
+            public readonly Vector3 LocalDirection;
+            public readonly float TraveledDepth;
+            public readonly bool PassedThrough;
             public readonly EDamageType DamageType;
             public readonly int FireIndex;
+            public readonly int ProjectileIndex;
             public readonly int Sequence;
+            public readonly HitPenetrationRecord Penetration;
+            public readonly WoundTrajectory Trajectory;
+
+            public bool HasWoundTrajectory =>
+                Trajectory.HasPath;
 
             public BulletImpactRecord(
                 Vector3 localPoint,
+                Vector3 localDirection,
+                float traveledDepth,
+                bool passedThrough,
                 EDamageType damageType,
                 int fireIndex,
-                int sequence)
+                int projectileIndex,
+                int sequence,
+                HitPenetrationRecord penetration,
+                WoundTrajectory trajectory)
             {
                 LocalPoint = localPoint;
+                LocalDirection = localDirection;
+                TraveledDepth = traveledDepth;
+                PassedThrough = passedThrough;
                 DamageType = damageType;
                 FireIndex = fireIndex;
+                ProjectileIndex = projectileIndex;
                 Sequence = sequence;
+                Penetration = penetration;
+                Trajectory = trajectory;
+            }
+        }
+
+        internal readonly struct HitPenetrationRecord
+        {
+            internal readonly float TissueThickness;
+            internal readonly float PenetrationDepth;
+            internal readonly float ReferenceThickness;
+            internal readonly float ImpactVelocity;
+            internal readonly float BulletDiameter;
+            internal readonly float WoundScore;
+            internal readonly float DepthRatio;
+            internal readonly float BleedDamageMultiplier;
+            internal readonly float BleedDurationMultiplier;
+            internal readonly string PenetrationModel;
+            internal readonly string DepthReferenceName;
+            internal readonly BleedType BleedType;
+
+            internal HitPenetrationRecord(WoundBallistics wound)
+            {
+                TissueThickness = wound.TissueThickness;
+                PenetrationDepth = wound.PenetrationDepth;
+                ReferenceThickness = wound.ReferenceThickness;
+                ImpactVelocity = wound.ImpactVelocity;
+                BulletDiameter = wound.BulletDiameter;
+                WoundScore = wound.WoundScore;
+                DepthRatio = wound.DepthRatio;
+                BleedDamageMultiplier = wound.BleedDamageMultiplier;
+                BleedDurationMultiplier = wound.BleedDurationMultiplier;
+                PenetrationModel = wound.PenetrationModel;
+                DepthReferenceName = wound.DepthReferenceName;
+                BleedType = wound.BleedType;
             }
         }
     }

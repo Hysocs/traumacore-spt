@@ -14,14 +14,12 @@ namespace TraumaCore
 
         internal static void Warning(object message)
         {
-            if (IsEnabled)
-                Plugin.Log?.LogWarning(message);
+            Plugin.Log?.LogWarning(message);
         }
 
         internal static void Error(object message)
         {
-            if (IsEnabled)
-                Plugin.Log?.LogError(message);
+            Plugin.Log?.LogError(message);
         }
     }
 }

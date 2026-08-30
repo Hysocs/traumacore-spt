@@ -30,7 +30,8 @@ namespace TraumaCore.Patches.HitPressure
             EDamageType type,
             float absorbed)
         {
-            if (__instance == null ||
+            if (!Plugin.EnableHitPressure.Value ||
+                __instance == null ||
                 !__instance.IsYourPlayer ||
                 type.IsSelfInflicted() ||
                 damage + absorbed <= 0f)
