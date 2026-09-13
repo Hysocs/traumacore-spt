@@ -33,8 +33,8 @@ namespace TraumaCore
         }
 
         private const float ColliderJoinTolerance = 0.02f;
-        private const float FullBleedDepthFraction = 0.75f;
-        private const float MinimumDirectDamage = 0.35f;
+        private const float DefaultFullDamageDepth = 0.75f;
+        private const float DefaultDamageFloor = 0.35f;
         private const float MinimumEntryDamage = 0.25f;
         private const float MinimumEntryDuration = 0.40f;
         private const float MaximumExitDamage = 0.35f;
@@ -53,10 +53,6 @@ namespace TraumaCore
         private const float BurstCacheDuration = 0.12f;
         private const float BurstPositionTolerance = 0.025f;
         private const float BurstDirectionDot = 0.998f;
-        private static readonly List<BodyDepthCacheEntry> BodyDepthCache =
-            new List<BodyDepthCacheEntry>(16);
-        private static readonly List<DepthReferenceCacheEntry>
-            DepthReferenceCache = new List<DepthReferenceCacheEntry>(16);
         private static readonly List<ImpactVelocityCacheEntry>
             ImpactVelocityCache = new List<ImpactVelocityCacheEntry>(8);
 
@@ -80,13 +76,14 @@ namespace TraumaCore
             internal readonly float DurationMultiplier;
 
             internal BleedScaling(float traveledDepth,
-                float referenceThickness, bool passedThrough)
+                float referenceThickness, float fullDamageDepth,
+                bool passedThrough)
             {
                 CenterDepthRatio = referenceThickness > 0.001f
                     ? Mathf.Clamp01(traveledDepth / referenceThickness)
                     : 1f;
                 float fullBleedDepth = referenceThickness *
-                    FullBleedDepthFraction;
+                    fullDamageDepth;
                 StrengthRatio = fullBleedDepth > 0.001f
                     ? Mathf.Clamp01(traveledDepth / fullBleedDepth)
                     : 1f;
@@ -99,36 +96,6 @@ namespace TraumaCore
             }
         }
 
-        private sealed class BodyDepthCacheEntry
-        {
-            internal int PlayerId;
-            internal int ColliderId;
-            internal EBodyPart BodyPart;
-            internal Transform Attachment;
-            internal Vector3 LocalHitPoint;
-            internal Vector3 LocalDirection;
-            internal float Thickness;
-            internal float CapturedAt;
-            internal int CapturedFrame;
-        }
-
-        private sealed class DepthReferenceCacheEntry
-        {
-            internal int PlayerId;
-            internal int ColliderId;
-            internal EBodyPart BodyPart;
-            internal Transform Attachment;
-            internal Vector3 LocalHitPoint;
-            internal Vector3 LocalDirection;
-            internal Vector3 LocalEntry;
-            internal Vector3 LocalExit;
-            internal float Thickness;
-            internal string Name;
-            internal bool IsResolved;
-            internal float CapturedAt;
-            internal int CapturedFrame;
-        }
-
         private sealed class ImpactVelocityCacheEntry
         {
             internal string AmmoId;
@@ -136,12 +103,14 @@ namespace TraumaCore
             internal Vector3 HitPoint;
             internal Vector3 Direction;
             internal float Velocity;
+            internal float InitialVelocity;
             internal float CapturedAt;
             internal int CapturedFrame;
         }
 
         internal readonly Vector3 EntryPoint;
         internal readonly Vector3 ExitPoint;
+        internal readonly EBodyPart BodyPart;
         internal readonly float TissueThickness;
         internal readonly float PenetrationDepth;
         internal readonly float ArmorPenetrationDepth;
@@ -201,9 +170,10 @@ namespace TraumaCore
         }
 
         internal float DirectDamageMultiplier =>
-            Mathf.Lerp(MinimumDirectDamage, 1f, DepthRatio);
+            Mathf.Lerp(FindDamageFloor(BodyPart), 1f, DepthRatio);
 
-        private WoundBallistics(Vector3 entryPoint, Vector3 exitPoint,
+        private WoundBallistics(EBodyPart bodyPart, Vector3 entryPoint,
+            Vector3 exitPoint,
             float tissueThickness, float penetrationDepth, float impactVelocity,
             float bulletDiameter, float woundScore, bool passedThrough,
             BleedType bleedType, Vector3 referenceEntryPoint,
@@ -214,6 +184,7 @@ namespace TraumaCore
             float fragmentationDepth = 0f,
             FragmentPath[] fragmentPaths = null)
         {
+            BodyPart = bodyPart;
             EntryPoint = entryPoint;
             ExitPoint = exitPoint;
             TissueThickness = tissueThickness;
@@ -229,7 +200,8 @@ namespace TraumaCore
             TraveledDepth = FindTraveledDepth(penetrationDepth,
                 tissueThickness);
             BleedScaling bleedScaling = new BleedScaling(TraveledDepth,
-                referenceThickness, passedThrough);
+                referenceThickness, FindFullDamageDepth(bodyPart),
+                passedThrough);
             CenterDepthRatio = bleedScaling.CenterDepthRatio;
             DepthRatio = bleedScaling.StrengthRatio;
             BleedDamageMultiplier = bleedScaling.DamageMultiplier;
@@ -262,14 +234,11 @@ namespace TraumaCore
                 ? Mathf.Max(1f, ammo.BulletDiameterMilimeters) : 7f;
             float initialVelocity = ammo != null
                 ? Mathf.Max(1f, ammo.InitialSpeed) : 700f;
-            float impactVelocity = ammo != null
-                ? FindImpactVelocity(damageInfo, ammo, direction)
-                : initialVelocity;
+            float impactVelocity = FindImpactVelocity(damageInfo, direction,
+                ref initialVelocity);
             float velocityRatio = Mathf.Clamp(impactVelocity / initialVelocity,
                 0.25f, 1.25f);
 
-            // EFT penetration is an abstract armor value. This converts it into a
-            // deliberately tunable gameplay depth so geometry can be validated.
             float diameterResistance = Mathf.Clamp(7f / diameter, 0.65f, 1.25f);
             float armorPenetrationDepth = (MinimumTissuePenetration +
                 Mathf.Max(0f, damageInfo.PenetrationPower) *
@@ -299,7 +268,7 @@ namespace TraumaCore
             Vector3 displayedEnd = hasExit
                 ? (passedThrough ? exit : entry + direction * penetrationDepth)
                 : entry + direction * penetrationDepth;
-            return new WoundBallistics(entry, displayedEnd, thickness,
+            return new WoundBallistics(bodyPart, entry, displayedEnd, thickness,
                 penetrationDepth, impactVelocity, diameter, woundScore,
                 passedThrough, bleedType, referenceEntry, referenceExit,
                 referenceThickness, depthReferenceName,
@@ -337,7 +306,8 @@ namespace TraumaCore
             Vector3 displayedEnd = passedThrough
                 ? EntryPoint + normalizedDirection * TissueThickness
                 : EntryPoint + normalizedDirection * penetrationDepth;
-            return new WoundBallistics(EntryPoint, displayedEnd, TissueThickness,
+            return new WoundBallistics(BodyPart, EntryPoint, displayedEnd,
+                TissueThickness,
                 penetrationDepth, retainedVelocity, BulletDiameter, woundScore,
                 passedThrough, bleedType, ReferenceEntryPoint,
                 ReferenceExitPoint, ReferenceThickness, DepthReferenceName,
@@ -412,7 +382,8 @@ namespace TraumaCore
                     $"pathBudget={shortestPathDepth:F3}-" +
                     $"{longestPathDepth:F3}m, velocity=85-95%");
 
-            return new WoundBallistics(EntryPoint, ExitPoint, TissueThickness,
+            return new WoundBallistics(BodyPart, EntryPoint, ExitPoint,
+                TissueThickness,
                 PenetrationDepth, ImpactVelocity, BulletDiameter, WoundScore,
                 hasFragmentExit, BleedType, ReferenceEntryPoint,
                 ReferenceExitPoint, ReferenceThickness, DepthReferenceName,
@@ -454,6 +425,24 @@ namespace TraumaCore
                 ? Mathf.Min(penetrationDepth, tissueThickness)
                 : penetrationDepth;
 
+        private static float FindFullDamageDepth(EBodyPart bodyPart)
+        {
+            if (bodyPart == EBodyPart.Head)
+                return OrganSystem.HeadFullDamageDepth.Value;
+            if (bodyPart == EBodyPart.Chest)
+                return OrganSystem.ChestFullDamageDepth.Value;
+            return DefaultFullDamageDepth;
+        }
+
+        private static float FindDamageFloor(EBodyPart bodyPart)
+        {
+            if (bodyPart == EBodyPart.Head)
+                return OrganSystem.HeadDamageFloor.Value;
+            if (bodyPart == EBodyPart.Chest)
+                return OrganSystem.ChestDamageFloor.Value;
+            return DefaultDamageFloor;
+        }
+
         private static float CalculateWoundScore(float effectiveDiameter,
             float traveledDepth, float impactVelocity) =>
             effectiveDiameter * DiameterWoundWeight +
@@ -471,80 +460,9 @@ namespace TraumaCore
             out Vector3 referenceEntry, out Vector3 referenceExit,
             out float referenceThickness, out string referenceName)
         {
-            int frame = Time.frameCount;
-            float now = Time.unscaledTime;
-            int playerId = player != null ? player.GetInstanceID() : 0;
-            int colliderId = hitCollider != null ? hitCollider.GetInstanceID() : 0;
-            Transform attachment = hitCollider != null
-                ? hitCollider.transform
-                : player != null ? player.Transform.Original : null;
-            Vector3 localHitPoint = attachment != null
-                ? attachment.InverseTransformPoint(hitPoint) : hitPoint;
-            Vector3 localDirection = attachment != null
-                ? attachment.InverseTransformDirection(direction).normalized
-                : direction;
-            for (int i = DepthReferenceCache.Count - 1; i >= 0; i--)
-            {
-                DepthReferenceCacheEntry cached = DepthReferenceCache[i];
-                float age = now - cached.CapturedAt;
-                if (age > BurstCacheDuration)
-                {
-                    DepthReferenceCache.RemoveAt(i);
-                    continue;
-                }
-                if (cached.Attachment == null)
-                {
-                    DepthReferenceCache.RemoveAt(i);
-                    continue;
-                }
-                bool isPellet = cached.CapturedFrame == frame;
-                float positionTolerance = isPellet
-                    ? PelletReferencePositionTolerance
-                    : BurstPositionTolerance;
-                float directionDot = isPellet
-                    ? PelletReferenceDirectionDot
-                    : BurstDirectionDot;
-                if (cached.PlayerId != playerId || cached.ColliderId != colliderId ||
-                    cached.BodyPart != bodyPart ||
-                    cached.Attachment != attachment ||
-                    (cached.LocalHitPoint - localHitPoint).sqrMagnitude >
-                        positionTolerance * positionTolerance ||
-                    Vector3.Dot(cached.LocalDirection, localDirection) < directionDot)
-                    continue;
-                referenceEntry = attachment.TransformPoint(cached.LocalEntry);
-                referenceExit = attachment.TransformPoint(cached.LocalExit);
-                referenceThickness = cached.Thickness;
-                referenceName = cached.Name + (isPellet
-                    ? " (pellet cache)" : " (burst cache)");
-                return cached.IsResolved;
-            }
-
-            bool isResolved = MeasureCenterLine(player, bodyPart, hitCollider,
-                hitPoint, direction, out referenceEntry, out referenceExit,
+            return MeasureCenterLine(player, bodyPart, hitCollider, hitPoint,
+                direction, out referenceEntry, out referenceExit,
                 out referenceThickness, out referenceName);
-            if (DepthReferenceCache.Count >= 32)
-                DepthReferenceCache.RemoveAt(0);
-            DepthReferenceCache.Add(new DepthReferenceCacheEntry
-            {
-                PlayerId = playerId,
-                ColliderId = colliderId,
-                BodyPart = bodyPart,
-                Attachment = attachment,
-                LocalHitPoint = localHitPoint,
-                LocalDirection = localDirection,
-                LocalEntry = attachment != null
-                    ? attachment.InverseTransformPoint(referenceEntry)
-                    : referenceEntry,
-                LocalExit = attachment != null
-                    ? attachment.InverseTransformPoint(referenceExit)
-                    : referenceExit,
-                Thickness = referenceThickness,
-                Name = referenceName,
-                IsResolved = isResolved,
-                CapturedAt = now,
-                CapturedFrame = frame
-            });
-            return isResolved;
         }
 
         private static bool MeasureCenterLine(Player player,
@@ -558,23 +476,8 @@ namespace TraumaCore
             referenceThickness = 0f;
             referenceName = "collider bounds";
             BodyPartCollider[] bodyColliders = player?.PlayerBones?.BodyPartColliders;
-            Bounds bodyBounds = default;
-            bool hasBounds = false;
-            if (bodyColliders != null)
-            {
-                for (int i = 0; i < bodyColliders.Length; i++)
-                {
-                    BodyPartCollider bodyCollider = bodyColliders[i];
-                    if (bodyCollider == null || bodyCollider.BodyPartType != bodyPart ||
-                        bodyCollider.Collider == null) continue;
-                    if (!hasBounds)
-                    {
-                        bodyBounds = bodyCollider.Collider.bounds;
-                        hasBounds = true;
-                    }
-                    else bodyBounds.Encapsulate(bodyCollider.Collider.bounds);
-                }
-            }
+            bool hasBounds = OrganSystem.TryGetBodyPartBounds(player,
+                bodyPart, out Bounds bodyBounds);
 
             Vector3 fallbackCenter = hasBounds ? bodyBounds.center : referenceEntry;
             bool hasFallback = TryMeasureLineAtCenter(bodyColliders, bodyPart,
@@ -693,68 +596,8 @@ namespace TraumaCore
         {
             exit = entry;
             thickness = 0f;
-            float now = Time.unscaledTime;
-            int frame = Time.frameCount;
-            int playerId = player != null ? player.GetInstanceID() : 0;
-            int colliderId = hitCollider != null ? hitCollider.GetInstanceID() : 0;
-            Transform attachment = hitCollider != null
-                ? hitCollider.transform
-                : player != null ? player.Transform.Original : null;
-            Vector3 localEntry = attachment != null
-                ? attachment.InverseTransformPoint(entry) : entry;
-            Vector3 localDirection = attachment != null
-                ? attachment.InverseTransformDirection(direction).normalized
-                : direction;
-            for (int i = BodyDepthCache.Count - 1; i >= 0; i--)
-            {
-                BodyDepthCacheEntry cached = BodyDepthCache[i];
-                if (now - cached.CapturedAt > BurstCacheDuration)
-                {
-                    BodyDepthCache.RemoveAt(i);
-                    continue;
-                }
-                if (cached.Attachment == null)
-                {
-                    BodyDepthCache.RemoveAt(i);
-                    continue;
-                }
-                bool isPellet = cached.CapturedFrame == frame;
-                float positionTolerance = isPellet
-                    ? PelletReferencePositionTolerance
-                    : BurstPositionTolerance;
-                float directionDot = isPellet
-                    ? PelletReferenceDirectionDot
-                    : BurstDirectionDot;
-                if (cached.PlayerId != playerId ||
-                    cached.ColliderId != colliderId ||
-                    cached.BodyPart != bodyPart ||
-                    cached.Attachment != attachment ||
-                    (cached.LocalHitPoint - localEntry).sqrMagnitude >
-                        positionTolerance * positionTolerance ||
-                    Vector3.Dot(cached.LocalDirection, localDirection) <
-                        directionDot) continue;
-                thickness = cached.Thickness;
-                exit = entry + direction * thickness;
-                return thickness > 0.001f;
-            }
-
-            bool isResolved = MeasureBodyPart(player, bodyPart, hitCollider,
-                entry, direction, out exit, out thickness);
-            if (BodyDepthCache.Count >= 32)
-                BodyDepthCache.RemoveAt(0);
-            BodyDepthCache.Add(new BodyDepthCacheEntry
-            {
-                PlayerId = playerId,
-                ColliderId = colliderId,
-                BodyPart = bodyPart,
-                Attachment = attachment,
-                LocalHitPoint = localEntry,
-                LocalDirection = localDirection,
-                Thickness = thickness,
-                CapturedAt = now,
-                CapturedFrame = frame
-            });
-            return isResolved;
+            return MeasureBodyPart(player, bodyPart, hitCollider, entry,
+                direction, out exit, out thickness);
         }
 
         private static bool MeasureBodyPart(Player player,
@@ -873,51 +716,28 @@ namespace TraumaCore
                 ? template as AmmoTemplate : null;
         }
 
-        private static float EstimateImpactVelocity(DamageInfo damageInfo,
-            AmmoTemplate ammo, Vector3 direction)
+        internal static void CaptureImpactVelocity(Shot shot)
         {
-            float initialVelocity = Mathf.Max(1f, ammo.InitialSpeed);
-            if (!Singleton<GameWorld>.Instantiated)
-                return initialVelocity;
-
-            TrajectoryCalculator trajectory = null;
-            try
+            if (shot == null || shot.Ammo == null ||
+                shot.CurrentVelocity.sqrMagnitude <= 0.0001f) return;
+            float now = Time.unscaledTime;
+            if (ImpactVelocityCache.Count >= 32)
+                ImpactVelocityCache.RemoveAt(0);
+            ImpactVelocityCache.Add(new ImpactVelocityCacheEntry
             {
-                trajectory = new TrajectoryCalculator();
-                trajectory.Initialize(damageInfo.MasterOrigin,
-                    direction * initialVelocity, ammo.BulletMassGram,
-                    ammo.BulletDiameterMilimeters, ammo.BallisticCoeficient);
-                float bestDistance = (damageInfo.MasterOrigin -
-                    damageInfo.HitPoint).sqrMagnitude;
-                float bestVelocity = initialVelocity;
-                for (int i = 0; i < trajectory.MaxAllowedLength - 1; i++)
-                {
-                    TrajectoryInfo point = trajectory.Next();
-                    float distance = (point.position - damageInfo.HitPoint).sqrMagnitude;
-                    if (distance <= bestDistance)
-                    {
-                        bestDistance = distance;
-                        bestVelocity = point.velocity.magnitude;
-                        continue;
-                    }
-                    if (i > 2)
-                        break;
-                }
-                return bestVelocity;
-            }
-            catch
-            {
-                return initialVelocity;
-            }
-            finally
-            {
-                if (trajectory != null && trajectory.history != null)
-                    trajectory.ClearClass();
-            }
+                AmmoId = shot.Ammo.TemplateId,
+                Origin = shot.MasterOrigin,
+                HitPoint = shot.HitPoint,
+                Direction = shot.Direction.normalized,
+                Velocity = shot.VelocityMagnitude,
+                InitialVelocity = Mathf.Max(1f, shot.InitialSpeed),
+                CapturedAt = now,
+                CapturedFrame = Time.frameCount
+            });
         }
 
         private static float FindImpactVelocity(DamageInfo damageInfo,
-            AmmoTemplate ammo, Vector3 direction)
+            Vector3 direction, ref float initialVelocity)
         {
             float now = Time.unscaledTime;
             int frame = Time.frameCount;
@@ -943,23 +763,10 @@ namespace TraumaCore
                         hitTolerance * hitTolerance ||
                     Vector3.Dot(cached.Direction, direction) <
                         directionDot) continue;
+                initialVelocity = cached.InitialVelocity;
                 return cached.Velocity;
             }
-
-            float velocity = EstimateImpactVelocity(damageInfo, ammo, direction);
-            if (ImpactVelocityCache.Count >= 16)
-                ImpactVelocityCache.RemoveAt(0);
-            ImpactVelocityCache.Add(new ImpactVelocityCacheEntry
-            {
-                AmmoId = damageInfo.SourceId,
-                Origin = damageInfo.MasterOrigin,
-                HitPoint = damageInfo.HitPoint,
-                Direction = direction,
-                Velocity = velocity,
-                CapturedAt = now,
-                CapturedFrame = frame
-            });
-            return velocity;
+            return initialVelocity;
         }
     }
 }

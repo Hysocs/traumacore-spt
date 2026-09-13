@@ -63,27 +63,15 @@ namespace TraumaCore
 
         public Vector3 WorldCenter(Player player)
         {
-            if (Anchor == OrganAnchor.Head)
-            {
-                Transform head = OrganSystem.GetHeadAnchor(player);
-                return head == null ? Vector3.zero : head.TransformPoint(LocalOffset);
-            }
-            Transform ribcage = OrganSystem.GetChestAnchor(player);
-            Transform pelvis = OrganSystem.GetPelvisAnchor(player);
-            if (ribcage == null) return Vector3.zero;
-
-            Vector3 chestCenter = pelvis != null
-                ? Vector3.Lerp(pelvis.position, ribcage.position, 0.72f)
-                : ribcage.position - ribcage.up * 0.18f;
-            return chestCenter + ribcage.right * LocalOffset.x +
-                   ribcage.up * LocalOffset.y + ribcage.forward * LocalOffset.z;
+            return AnatomyPoseSystem.TryGetOrgan(AnatomyRig.FromPlayer(player),
+                this, out BoneVolumePose pose) ? pose.Center : Vector3.zero;
         }
 
         public Quaternion WorldRotation(Player player)
         {
-            Transform anchor = GetAnchor(player);
-            return anchor == null ? Quaternion.identity :
-                anchor.rotation * Quaternion.Euler(LocalRotationEuler);
+            return AnatomyPoseSystem.TryGetOrgan(AnatomyRig.FromPlayer(player),
+                this, out BoneVolumePose pose) ? pose.Rotation :
+                Quaternion.identity;
         }
 
         public bool IntersectsShot(Player player, Vector3 hitPoint, Vector3 direction,
@@ -100,67 +88,18 @@ namespace TraumaCore
             intersection = hitPoint;
             travelDistance = 0f;
             exitDistance = 0f;
-            Transform anchor = GetAnchor(player);
-            if (anchor == null || direction.sqrMagnitude < 0.0001f) return false;
-
-            Vector3 center = WorldCenter(player);
-            Quaternion rotation = WorldRotation(player);
-            Vector3 axisRight = rotation * Vector3.right;
-            Vector3 axisUp = rotation * Vector3.up;
-            Vector3 axisForward = rotation * Vector3.forward;
-            Vector3 ray = direction.normalized;
-            Vector3 originDelta = hitPoint - center;
-            Vector3 localOrigin = new Vector3(Vector3.Dot(originDelta, axisRight),
-                Vector3.Dot(originDelta, axisUp), Vector3.Dot(originDelta, axisForward));
-            Vector3 localDirection = new Vector3(Vector3.Dot(ray, axisRight),
-                Vector3.Dot(ray, axisUp), Vector3.Dot(ray, axisForward));
-            if (Shape == OrganShape.Ellipsoid)
-            {
-                Vector3 e = HalfExtents;
-                float a = localDirection.x * localDirection.x / (e.x * e.x) +
-                          localDirection.y * localDirection.y / (e.y * e.y) +
-                          localDirection.z * localDirection.z / (e.z * e.z);
-                float b = 2f * (localOrigin.x * localDirection.x / (e.x * e.x) +
-                          localOrigin.y * localDirection.y / (e.y * e.y) +
-                          localOrigin.z * localDirection.z / (e.z * e.z));
-                float c = localOrigin.x * localOrigin.x / (e.x * e.x) +
-                          localOrigin.y * localOrigin.y / (e.y * e.y) +
-                          localOrigin.z * localOrigin.z / (e.z * e.z) - 1f;
-                float discriminant = b * b - 4f * a * c;
-                if (a <= 0.000001f || discriminant < 0f) return false;
-                float root = Mathf.Sqrt(discriminant);
-                float near = (-b - root) / (2f * a);
-                float far = (-b + root) / (2f * a);
-                float entry = near >= 0f ? near : far >= 0f ? 0f : -1f;
-                if (entry < 0f || entry > 0.55f) return false;
-                travelDistance = entry;
-                exitDistance = Mathf.Max(entry, far);
-                intersection = hitPoint + ray * entry;
-                return true;
-            }
-            float enter = 0f;
-            float exit = 0.55f;
-            for (int axis = 0; axis < 3; axis++)
-            {
-                float origin = localOrigin[axis];
-                float delta = localDirection[axis];
-                float extent = HalfExtents[axis];
-                if (Mathf.Abs(delta) < 0.00001f)
-                {
-                    if (origin < -extent || origin > extent) return false;
-                    continue;
-                }
-                float near = (-extent - origin) / delta;
-                float far = (extent - origin) / delta;
-                if (near > far) { float swap = near; near = far; far = swap; }
-                enter = Mathf.Max(enter, near);
-                exit = Mathf.Min(exit, far);
-                if (enter > exit) return false;
-            }
-            travelDistance = enter;
-            exitDistance = Mathf.Max(enter, exit);
-            intersection = hitPoint + ray * enter;
-            return exit >= 0f && enter <= 0.55f;
+            if (!AnatomyPoseSystem.TryGetOrgan(AnatomyRig.FromPlayer(player),
+                this, out BoneVolumePose pose)) return false;
+            bool intersects = Shape == OrganShape.Ellipsoid
+                ? AnatomyIntersections.TryIntersectEllipsoid(pose, hitPoint,
+                    direction, false, out AnatomyHit hit)
+                : AnatomyIntersections.TryIntersectBox(pose, hitPoint,
+                    direction, out hit);
+            if (!intersects) return false;
+            intersection = hit.Point;
+            travelDistance = hit.EntryDistance;
+            exitDistance = hit.ExitDistance;
+            return true;
         }
 
         public Transform GetAnchor(Player player)
@@ -189,27 +128,65 @@ namespace TraumaCore
             return player.PlayerBones.Head.Original;
         }
 
-        internal const float ArmBoneRadius = 0.0103125f;
-        internal const float LegBoneRadius = 0.01875f;
-        internal const float UpperSpineRadius = 0.021875f;
-        internal const float ThoracicSpineRadius = 0.025f;
-        internal static bool TryFindSkullIntersection(WoundBallistics wound,
-            Vector3 direction, out Vector3 intersection)
-        {
-            intersection = wound.EntryPoint;
-            if (direction.sqrMagnitude < 0.0001f ||
-                wound.TraveledDepth < SkullMinimumDepth) return false;
-            intersection += direction.normalized * SkullMinimumDepth;
-            return true;
-        }
 
-        internal static bool TryFindRibcageIntersection(
+        internal static bool TryFindSkullIntersection(Player player,
             WoundBallistics wound, Vector3 direction, out Vector3 intersection)
         {
             intersection = wound.EntryPoint;
-            if (direction.sqrMagnitude < 0.0001f ||
-                wound.TraveledDepth < RibcageMinimumDepth) return false;
-            intersection += direction.normalized * RibcageMinimumDepth;
+            AnatomyRig rig = AnatomyRig.FromPlayer(player);
+            bool found = false;
+            float nearestDistance = float.MaxValue;
+            if (AnatomyPoseSystem.TryGetSkull(rig, out BoneVolumePose skull1) &&
+                AnatomyIntersections.TryIntersectEllipsoid(skull1,
+                    wound.EntryPoint, direction, false, out AnatomyHit hit1))
+            {
+                found = true;
+                nearestDistance = hit1.EntryDistance;
+                intersection = hit1.Point;
+            }
+            if (AnatomyPoseSystem.TryGetSecondSkull(rig,
+                    out BoneVolumePose skull2) &&
+                AnatomyIntersections.TryIntersectEllipsoid(skull2,
+                    wound.EntryPoint, direction, false, out AnatomyHit hit2) &&
+                hit2.EntryDistance < nearestDistance)
+            {
+                found = true;
+                intersection = hit2.Point;
+            }
+            return found;
+        }
+
+        internal static bool TryFindBrainIntersection(Player player,
+            Vector3 origin, Vector3 direction, out Vector3 intersection,
+            out float entryDistance, out float exitDistance)
+        {
+            intersection = origin;
+            entryDistance = exitDistance = 0f;
+            bool found = false;
+            OrganDefinition[] brainLobes = { Brain, LowerBrain };
+            for (int index = 0; index < brainLobes.Length; index++)
+            {
+                if (!brainLobes[index].IntersectsShot(player, origin, direction,
+                    out Vector3 point, out float entry, out float exit) ||
+                    found && entry >= entryDistance) continue;
+                found = true;
+                intersection = point;
+                entryDistance = entry;
+                exitDistance = exit;
+            }
+            return found;
+        }
+
+        internal static bool TryFindRibcageIntersection(Player player,
+            WoundBallistics wound, Vector3 direction, out Vector3 intersection)
+        {
+            intersection = wound.EntryPoint;
+            if (!AnatomyPoseSystem.TryGetRibcage(
+                    AnatomyRig.FromPlayer(player), out RibcageShape ribcage) ||
+                !AnatomyIntersections.TryIntersectRibcage(ribcage,
+                    wound.EntryPoint, direction, out AnatomyHit hit))
+                return false;
+            intersection = hit.Point;
             return true;
         }
 
@@ -240,60 +217,54 @@ namespace TraumaCore
             out Vector3 brainBase, out Vector3 chestTop)
         {
             brainBase = chestTop = Vector3.zero;
-            Transform head = GetHeadAnchor(player);
-            Transform ribcage = GetChestAnchor(player);
-            if (head == null || ribcage == null || Brain == null) return false;
-
-            brainBase = Brain.WorldCenter(player) -
-                (Brain.WorldRotation(player) * Vector3.up) * Brain.HalfExtents.y +
-                head.TransformVector(CervicalBrainEndOffset);
-            chestTop = ribcage.position +
-                ribcage.TransformVector(CervicalChestEndOffset);
-            return (brainBase - chestTop).sqrMagnitude > 0.0001f;
+            if (!AnatomyPoseSystem.TryGetUpperSpine(
+                AnatomyRig.FromPlayer(player), out BoneSegmentPose segment))
+                return false;
+            brainBase = segment.Start;
+            chestTop = segment.End;
+            return true;
         }
 
         internal static bool IntersectsUpperSpine(Player player, Vector3 hitPoint,
             Vector3 direction, out Vector3 intersection)
         {
             intersection = hitPoint;
-            if (direction.sqrMagnitude < 0.0001f) return false;
-            Vector3 brainBase, chestTop;
-            if (!TryGetUpperSpineSegment(player, out brainBase, out chestTop)) return false;
-            Vector3 shotEnd = hitPoint + direction.normalized * 0.55f;
-            return SegmentCapsuleHit(hitPoint, shotEnd, brainBase, chestTop,
-                UpperSpineRadius, out intersection);
+            if (!AnatomyPoseSystem.TryGetUpperSpine(
+                    AnatomyRig.FromPlayer(player), out BoneSegmentPose segment) ||
+                !AnatomyIntersections.TryIntersectCylinder(segment, hitPoint,
+                    direction, out AnatomyHit hit)) return false;
+            intersection = hit.Point;
+            return true;
         }
 
         internal static bool TryGetThoracicSpineSegment(Player player,
             out Vector3 chestTop, out Vector3 stomachTop)
         {
             chestTop = stomachTop = Vector3.zero;
-            Transform ribcage = GetChestAnchor(player);
-            Transform pelvis = GetPelvisAnchor(player);
-            if (ribcage == null || pelvis == null) return false;
-
-            chestTop = ribcage.position +
-                ribcage.TransformVector(SpineChestEndOffset);
-            stomachTop = pelvis.position +
-                pelvis.TransformVector(SpinePelvisEndOffset);
-            return (chestTop - stomachTop).sqrMagnitude > 0.0001f;
+            if (!AnatomyPoseSystem.TryGetThoracicSpine(
+                AnatomyRig.FromPlayer(player), out BoneSegmentPose segment))
+                return false;
+            chestTop = segment.Start;
+            stomachTop = segment.End;
+            return true;
         }
 
         internal static bool IntersectsThoracicSpine(Player player, Vector3 hitPoint,
             Vector3 direction, out Vector3 intersection)
         {
             intersection = hitPoint;
-            if (direction.sqrMagnitude < 0.0001f) return false;
-            Vector3 chestTop, stomachTop;
-            if (!TryGetThoracicSpineSegment(player, out chestTop, out stomachTop)) return false;
-            Vector3 shotEnd = hitPoint + direction.normalized * 0.55f;
-            return SegmentCapsuleHit(hitPoint, shotEnd, chestTop, stomachTop,
-                ThoracicSpineRadius, out intersection);
+            if (!AnatomyPoseSystem.TryGetThoracicSpine(
+                    AnatomyRig.FromPlayer(player), out BoneSegmentPose segment) ||
+                !AnatomyIntersections.TryIntersectCylinder(segment, hitPoint,
+                    direction, out AnatomyHit hit)) return false;
+            intersection = hit.Point;
+            return true;
         }
 
         internal static bool TryGetBoneSegments(Player player, EBodyPart bodyPart,
             out Transform firstStart, out Transform firstEnd,
-            out Transform secondStart, out Transform secondEnd)
+            out Transform secondStart, out Transform secondEnd,
+            IReadOnlyDictionary<Transform, Transform> bonesBySource = null)
         {
             firstStart = firstEnd = secondStart = secondEnd = null;
             if (player == null || player.PlayerBones == null) return false;
@@ -309,11 +280,11 @@ namespace TraumaCore
             switch (bodyPart)
             {
                 case EBodyPart.LeftArm:
-                    firstStart = cache.LeftShoulder; firstEnd = cache.LeftElbow;
+                    firstStart = cache.LeftUpperArm; firstEnd = cache.LeftElbow;
                     secondStart = cache.LeftElbow; secondEnd = cache.LeftHand;
                     break;
                 case EBodyPart.RightArm:
-                    firstStart = cache.RightShoulder; firstEnd = cache.RightElbow;
+                    firstStart = cache.RightUpperArm; firstEnd = cache.RightElbow;
                     secondStart = cache.RightElbow; secondEnd = cache.RightHand;
                     break;
                 case EBodyPart.LeftLeg:
@@ -327,8 +298,20 @@ namespace TraumaCore
                     secondEnd = cache.RightFoot;
                     break;
             }
+            if (bonesBySource != null)
+            {
+                firstStart = ResolveMappedBone(firstStart, bonesBySource);
+                firstEnd = ResolveMappedBone(firstEnd, bonesBySource);
+                secondStart = ResolveMappedBone(secondStart, bonesBySource);
+                secondEnd = ResolveMappedBone(secondEnd, bonesBySource);
+            }
             return firstStart != null && firstEnd != null || secondStart != null && secondEnd != null;
         }
+
+        private static Transform ResolveMappedBone(Transform source,
+            IReadOnlyDictionary<Transform, Transform> bonesBySource) =>
+            source != null && bonesBySource.TryGetValue(source, out Transform mapped)
+                ? mapped : null;
 
         internal static bool TryFindDepthReferenceCenter(Player player,
             EBodyPart bodyPart, Vector3 hitPoint, out Vector3 center,
@@ -400,42 +383,8 @@ namespace TraumaCore
             return start + segment * position;
         }
 
-        internal static bool IntersectsLimbBone(Player player, EBodyPart bodyPart,
-            Vector3 hitPoint, Vector3 direction, out Vector3 intersection)
-        {
-            intersection = hitPoint;
-            if (direction.sqrMagnitude < 0.0001f) return false;
-            Transform a, b, c, d;
-            if (!TryGetBoneSegments(player, bodyPart, out a, out b, out c, out d)) return false;
-            Vector3 shotEnd = hitPoint + direction.normalized * 0.55f;
-            float radius = bodyPart == EBodyPart.LeftArm || bodyPart == EBodyPart.RightArm
-                ? ArmBoneRadius : LegBoneRadius;
-            if (a != null && b != null && SegmentCapsuleHit(hitPoint, shotEnd, a.position, b.position, radius, out intersection)) return true;
-            if (c != null && d != null && SegmentCapsuleHit(hitPoint, shotEnd,
-                c.position, d.position, radius, out intersection)) return true;
-            return IsLeg(bodyPart) && b != null && c != null && b != c &&
-                SegmentCapsuleHit(hitPoint, shotEnd, b.position, c.position,
-                    LegBoneRadius, out intersection);
-        }
-
         private static bool IsLeg(EBodyPart bodyPart)
         { return bodyPart == EBodyPart.LeftLeg || bodyPart == EBodyPart.RightLeg; }
-
-        private static bool SegmentCapsuleHit(Vector3 shotStart, Vector3 shotEnd,
-            Vector3 boneStart, Vector3 boneEnd, float radius, out Vector3 shotClosest)
-        {
-            Vector3 u = shotEnd - shotStart, v = boneEnd - boneStart, w = shotStart - boneStart;
-            float a = Vector3.Dot(u, u), b = Vector3.Dot(u, v), c = Vector3.Dot(v, v);
-            float d = Vector3.Dot(u, w), e = Vector3.Dot(v, w);
-            float denominator = a * c - b * b;
-            float s = denominator > 0.000001f ? Mathf.Clamp01((b * e - c * d) / denominator) : 0f;
-            float t = c > 0.000001f ? Mathf.Clamp01((b * s + e) / c) : 0f;
-            s = a > 0.000001f ? Mathf.Clamp01((b * t - d) / a) : 0f;
-            Vector3 onShot = shotStart + u * s;
-            Vector3 onBone = boneStart + v * t;
-            shotClosest = onShot;
-            return (onShot - onBone).sqrMagnitude <= radius * radius;
-        }
 
         private static Transform Original(BifacialTransform bone)
         { return bone == null ? null : bone.Original; }
@@ -455,8 +404,8 @@ namespace TraumaCore
 
         internal sealed class LimbBoneCache
         {
-            internal Transform LeftShoulder, LeftElbow, LeftHand;
-            internal Transform RightShoulder, RightElbow, RightHand;
+            internal Transform LeftUpperArm, LeftElbow, LeftHand;
+            internal Transform RightUpperArm, RightElbow, RightHand;
             internal Transform LeftHip, LeftKnee, LeftCalf, LeftFoot;
             internal Transform RightHip, RightKnee, RightCalf, RightFoot;
             private bool _complete;
@@ -467,8 +416,6 @@ namespace TraumaCore
                 if (_complete || Time.unscaledTime < _nextRetry || player == null || player.PlayerBones == null) return;
                 _nextRetry = Time.unscaledTime + 1f;
                 PlayerBones bones = player.PlayerBones;
-                LeftShoulder = LeftShoulder != null ? LeftShoulder : Original(bones.LeftShoulder);
-                RightShoulder = RightShoulder != null ? RightShoulder : Original(bones.RightShoulder);
                 LeftHip = LeftHip != null ? LeftHip : Original(bones.LeftThigh1);
                 RightHip = RightHip != null ? RightHip : Original(bones.RightThigh1);
                 LeftKnee = LeftKnee != null ? LeftKnee : Original(bones.LeftThigh2);
@@ -479,6 +426,11 @@ namespace TraumaCore
                 IDictionary<string, Transform> skeleton = player.PlayerBody != null &&
                     player.PlayerBody.SkeletonRootJoint != null
                     ? player.PlayerBody.SkeletonRootJoint.Bones : null;
+                // EFT's Shoulder references sit at the collarbone root, not the upper-arm joint.
+                LeftUpperArm = LeftUpperArm != null ? LeftUpperArm : FindBone(skeleton,
+                    "Base HumanLUpperarm", "HumanLUpperarm", "LeftUpperArm");
+                RightUpperArm = RightUpperArm != null ? RightUpperArm : FindBone(skeleton,
+                    "Base HumanRUpperarm", "HumanRUpperarm", "RightUpperArm");
                 LeftElbow = LeftElbow != null ? LeftElbow : FindBone(skeleton,
                     "HumanLForearm1", "HumanLForearm2", "LeftForearm");
                 RightElbow = RightElbow != null ? RightElbow : FindBone(skeleton,
@@ -489,9 +441,14 @@ namespace TraumaCore
                 RightFoot = RightFoot != null ? RightFoot : FindBone(skeleton, "HumanRFoot", "RightFoot", "RFoot");
 
                 Transform[] hierarchy = null;
-                if (LeftElbow == null || RightElbow == null || LeftCalf == null ||
+                if (LeftUpperArm == null || RightUpperArm == null ||
+                    LeftElbow == null || RightElbow == null || LeftCalf == null ||
                     RightCalf == null || LeftFoot == null || RightFoot == null)
                     hierarchy = player.GetComponentsInChildren<Transform>(true);
+                LeftUpperArm = LeftUpperArm != null ? LeftUpperArm : FindHierarchyBone(hierarchy,
+                    "HumanLUpperarm", "LeftUpperArm");
+                RightUpperArm = RightUpperArm != null ? RightUpperArm : FindHierarchyBone(hierarchy,
+                    "HumanRUpperarm", "RightUpperArm");
                 LeftElbow = LeftElbow != null ? LeftElbow : FindHierarchyBone(hierarchy,
                     "HumanLForearm1", "HumanLForearm2", "LeftForearm");
                 RightElbow = RightElbow != null ? RightElbow : FindHierarchyBone(hierarchy,
@@ -511,10 +468,10 @@ namespace TraumaCore
                     if (animators[i] != null && animators[i].isHuman) { animator = animators[i]; break; }
                 if (animator != null)
                 {
-                    SetMissing(ref LeftShoulder, animator, HumanBodyBones.LeftUpperArm);
+                    SetMissing(ref LeftUpperArm, animator, HumanBodyBones.LeftUpperArm);
                     SetMissing(ref LeftElbow, animator, HumanBodyBones.LeftLowerArm);
                     SetMissing(ref LeftHand, animator, HumanBodyBones.LeftHand);
-                    SetMissing(ref RightShoulder, animator, HumanBodyBones.RightUpperArm);
+                    SetMissing(ref RightUpperArm, animator, HumanBodyBones.RightUpperArm);
                     SetMissing(ref RightElbow, animator, HumanBodyBones.RightLowerArm);
                     SetMissing(ref RightHand, animator, HumanBodyBones.RightHand);
                     SetMissing(ref LeftHip, animator, HumanBodyBones.LeftUpperLeg);
@@ -526,8 +483,8 @@ namespace TraumaCore
                     SetMissing(ref RightCalf, animator, HumanBodyBones.RightLowerLeg);
                     SetMissing(ref RightFoot, animator, HumanBodyBones.RightFoot);
                 }
-                _complete = LeftShoulder != null && LeftElbow != null && LeftHand != null &&
-                    RightShoulder != null && RightElbow != null && RightHand != null &&
+                _complete = LeftUpperArm != null && LeftElbow != null && LeftHand != null &&
+                    RightUpperArm != null && RightElbow != null && RightHand != null &&
                     LeftHip != null && LeftKnee != null && LeftFoot != null &&
                     RightHip != null && RightKnee != null && RightFoot != null;
             }

@@ -29,6 +29,7 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
             internal int Sequence;
             internal bool IsFragmentBranch;
             internal bool HasFragmentBranches;
+            internal DeathScreenDamageTracker.HitAnatomyRecord Anatomy;
             internal StaticHitCallout Parent;
             internal RectTransform EntryMark;
             internal RectTransform StartArrow;
@@ -36,6 +37,8 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
             internal RectTransform DepthLine;
             internal RectTransform EndPoint;
             internal RectTransform ExitMark;
+            internal RectTransform CustomHitMark;
+            internal RectTransform CustomHitLine;
             internal RectTransform Label;
             internal TextMeshProUGUI Text;
         }
@@ -88,14 +91,14 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
             RawImage previewImage,
             Transform anchorRoot,
             Profile profile,
-            Func<bool> shouldShowTrajectories)
+            Func<bool> shouldShowTrajectories, Func<bool> shouldHideBackHits = null)
         {
             if (host == null || activeRoot == null || previewCamera == null ||
                 previewImage == null || anchorRoot == null || profile == null)
                 return;
             host.StartCoroutine(CreateStaticCorpseMarkers(
                 activeRoot, previewCamera, previewImage, anchorRoot, profile,
-                shouldShowTrajectories));
+                shouldShowTrajectories, shouldHideBackHits));
         }
 
         private static IEnumerator CreateStaticCorpseMarkers(
@@ -104,7 +107,7 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
             RawImage previewImage,
             Transform anchorRoot,
             Profile profile,
-            Func<bool> shouldShowTrajectories)
+            Func<bool> shouldShowTrajectories, Func<bool> shouldHideBackHits)
         {
             yield return null;
             Dictionary<EBodyPart, Transform> anchors = new();
@@ -130,13 +133,14 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                 Container = markerRect
             };
             List<StaticHitCallout> callouts = CreateStaticHitCallouts(
-                profile, anchors, markerRect, includeLabels: true);
+                profile, anchors, markerRect, anchorRoot, includeLabels: true);
             while (activeRoot != null && activeRoot.activeInHierarchy)
             {
                 bool shouldShow = shouldShowTrajectories?.Invoke() ?? true;
                 container.SetActive(shouldShow);
                 if (shouldShow)
-                    UpdateStaticHitCallouts(preview, callouts);
+                    UpdateStaticHitCallouts(preview, callouts,
+                        shouldHideBackHits?.Invoke() ?? false);
                 yield return null;
             }
         }
@@ -145,9 +149,11 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
             Profile profile,
             IReadOnlyDictionary<EBodyPart, Transform> anchors,
             RectTransform container,
+            Transform modelRoot,
             bool includeLabels)
         {
             List<StaticHitCallout> callouts = new();
+            Transform[] meshBones = MeshSkeleton.ResolveBones(modelRoot);
             foreach (EBodyPart bodyPart in BodyPartAnchorResolver.BodyParts)
             {
                 if (!anchors.TryGetValue(bodyPart, out Transform anchor) ||
@@ -161,6 +167,8 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                     impactIndex++)
                 {
                     var impact = recordedDamage.Impacts[impactIndex];
+                    Transform impactAnchor = BodyPartAnchorResolver.ResolveRecordedAnchor(
+                        meshBones, impact.AnchorName, anchor);
                     if (!impact.HasWoundTrajectory)
                         continue;
                     WoundPathSegment primarySegment =
@@ -178,13 +186,20 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                         container, $"End_{bodyPart}_{impactIndex}", 8f, color);
                     RectTransform exitMark = CreateTrajectoryGraphic<LastHitXGraphic>(
                         container, $"Exit_{bodyPart}_{impactIndex}", 12f, color);
+                    RectTransform customHitMark =
+                        CreateTrajectoryGraphic<LastHitXGraphic>(container,
+                            $"CustomHit_{bodyPart}_{impactIndex}", 18f,
+                            ResolveCustomHitColor(impact.Anatomy));
+                    RectTransform customHitLine = CreateTrajectoryLine(container,
+                        $"CustomHitLine_{bodyPart}_{impactIndex}",
+                        ResolveCustomHitColor(impact.Anatomy), 5f);
                     RectTransform label;
                     TextMeshProUGUI text;
                     if (includeLabels)
                     {
                         label = CreateTrajectoryLabel(
                             container, bodyPart, impact.TraveledDepth,
-                            impact.PassedThrough, color, out text);
+                            impact.PassedThrough, impact.Anatomy, color, out text);
                     }
                     else
                     {
@@ -194,7 +209,7 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                     StaticHitCallout primary = new StaticHitCallout
                     {
                         BodyPart = bodyPart,
-                        Anchor = anchor,
+                        Anchor = impactAnchor,
                         LocalEntry = primarySegment.StartPoint,
                         LocalDirection = primarySegment.Direction,
                         TraveledDepth = primarySegment.TraveledDepth,
@@ -202,12 +217,15 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                             WoundPathEndpoint.Exit,
                         Sequence = impact.Sequence,
                         HasFragmentBranches = impact.Trajectory.HasBranches,
+                        Anatomy = impact.Anatomy,
                         EntryMark = entryMark,
                         StartArrow = startArrow,
                         ApproachLine = approachLine,
                         DepthLine = depthLine,
                         EndPoint = endPoint,
                         ExitMark = exitMark,
+                        CustomHitMark = customHitMark,
+                        CustomHitLine = customHitLine,
                         Label = label,
                         Text = text
                     };
@@ -233,7 +251,7 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                         callouts.Add(new StaticHitCallout
                         {
                             BodyPart = bodyPart,
-                            Anchor = anchor,
+                            Anchor = impactAnchor,
                             LocalEntry = fragment.StartPoint,
                             LocalDirection = fragment.Direction,
                             TraveledDepth = fragment.TraveledDepth,
@@ -248,6 +266,8 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                             DepthLine = CreateHiddenTrajectoryGraphic(container),
                             EndPoint = fragmentEnd,
                             ExitMark = fragmentExit,
+                            CustomHitMark = CreateHiddenTrajectoryGraphic(container),
+                            CustomHitLine = CreateHiddenTrajectoryGraphic(container),
                             Label = CreateHiddenTrajectoryGraphic(container),
                             Text = null
                         });
@@ -261,7 +281,7 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
 
         private static void UpdateStaticHitCallouts(
             ModelPreview preview,
-            IReadOnlyList<StaticHitCallout> callouts)
+            IReadOnlyList<StaticHitCallout> callouts, bool hideBackHits = true)
         {
             Rect bounds = preview.Container.rect;
             for (int index = 0; index < callouts.Count; index++)
@@ -275,6 +295,12 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                     ? ResolveCalloutEnd(callout.Parent)
                     : entryWorld - directionWorld * approachDistance;
                 Vector3 depthWorld = entryWorld + directionWorld * callout.TraveledDepth;
+                bool hasCustomHit = !callout.IsFragmentBranch &&
+                    callout.Anatomy.HasCustomHit;
+                Vector3 customHitWorld = callout.Anchor.TransformPoint(
+                    callout.Anatomy.LimbBone
+                        ? callout.Anatomy.LocalBoneIntersection
+                        : callout.Anatomy.LocalIntersection);
                 bool isFragment = callout.IsFragmentBranch;
                 Vector3 displayedEndWorld = !isFragment && callout.PassedThrough
                     ? depthWorld + directionWorld * approachDistance
@@ -283,29 +309,61 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                 Vector3 entryViewport = preview.Camera.WorldToViewportPoint(entryWorld);
                 Vector3 exitViewport = preview.Camera.WorldToViewportPoint(depthWorld);
                 Vector3 depthViewport = preview.Camera.WorldToViewportPoint(displayedEndWorld);
-                bool isVisible = entryViewport.z > 0f;
+                Vector3 customHitViewport = preview.Camera.WorldToViewportPoint(
+                    customHitWorld);
+                bool isVisible = IsInsidePreview(preview.Image, entryViewport);
+                if (hideBackHits)
+                {
+                    StaticHitCallout surfaceHit = callout;
+                    while (surfaceHit.Parent != null) surfaceHit = surfaceHit.Parent;
+                    Vector3 normal = surfaceHit.Anchor.TransformDirection(
+                        surfaceHit.Anatomy.LocalSurfaceNormal);
+                    Vector3 surface = surfaceHit.Anchor.TransformPoint(surfaceHit.LocalEntry);
+                    Vector3 toCamera = preview.Camera.orthographic
+                        ? -preview.Camera.transform.forward
+                        : preview.Camera.transform.position - surface;
+                    if (normal.sqrMagnitude > 0.0001f)
+                        isVisible &= Vector3.Dot(normal, toCamera) > 0f;
+                }
+                bool hasApproach = IsInsidePreview(preview.Image,
+                    approachViewport);
+                bool hasDepthPoint = IsInsidePreview(preview.Image,
+                    depthViewport);
+                bool hasExitPoint = IsInsidePreview(preview.Image,
+                    exitViewport);
+                bool hasCustomPoint = IsInsidePreview(preview.Image,
+                    customHitViewport);
                 bool hasDepth = callout.TraveledDepth > 0f;
                 callout.EntryMark.gameObject.SetActive(isVisible && !isFragment);
                 callout.StartArrow.gameObject.SetActive(
-                    isVisible && !isFragment);
-                callout.ApproachLine.gameObject.SetActive(isVisible);
+                    isVisible && hasApproach && !isFragment);
+                callout.ApproachLine.gameObject.SetActive(isVisible &&
+                    hasApproach && (!isFragment || hasDepthPoint));
                 callout.DepthLine.gameObject.SetActive(
-                    isVisible && hasDepth && !isFragment);
+                    isVisible && hasDepth && hasDepthPoint && !isFragment);
                 callout.EndPoint.gameObject.SetActive(
-                    isVisible && hasDepth && !callout.PassedThrough &&
+                    isVisible && hasDepth && hasDepthPoint && !callout.PassedThrough &&
                     !callout.HasFragmentBranches);
                 callout.ExitMark.gameObject.SetActive(
-                    isVisible && hasDepth && callout.PassedThrough);
+                    isVisible && hasDepth && hasExitPoint && callout.PassedThrough);
+                callout.CustomHitMark.gameObject.SetActive(
+                    isVisible && hasCustomHit && hasCustomPoint);
+                callout.CustomHitLine.gameObject.SetActive(
+                    isVisible && hasCustomHit && hasCustomPoint);
                 callout.Label.gameObject.SetActive(
                     isVisible && !isFragment && callout.Text != null);
                 if (!isVisible)
                     continue;
 
-                Vector2 approachPoint = ConvertViewportToLocal(
-                    preview.Image, approachViewport);
                 Vector2 entryPoint = ConvertViewportToLocal(preview.Image, entryViewport);
-                Vector2 exitPoint = ConvertViewportToLocal(preview.Image, exitViewport);
-                Vector2 depthPoint = ConvertViewportToLocal(preview.Image, depthViewport);
+                Vector2 approachPoint = hasApproach
+                    ? ConvertViewportToLocal(preview.Image, approachViewport) : entryPoint;
+                Vector2 exitPoint = hasExitPoint
+                    ? ConvertViewportToLocal(preview.Image, exitViewport) : entryPoint;
+                Vector2 depthPoint = hasDepthPoint
+                    ? ConvertViewportToLocal(preview.Image, depthViewport) : entryPoint;
+                Vector2 customHitPoint = hasCustomPoint
+                    ? ConvertViewportToLocal(preview.Image, customHitViewport) : entryPoint;
                 float side = entryPoint.x < bounds.center.x ? -1f : 1f;
                 Vector2 labelPoint = depthPoint + new Vector2(
                     side * 20f, 16f + ((index % 3) - 1) * 14f);
@@ -323,6 +381,9 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                     approachPoint,
                     isFragment ? depthPoint : entryPoint);
                 UpdateCalloutLine(callout.DepthLine, entryPoint, depthPoint);
+                UpdateCalloutLine(callout.CustomHitLine, entryPoint,
+                    customHitPoint);
+                callout.CustomHitMark.anchoredPosition = customHitPoint;
                 Vector2 approachDirection = entryPoint - approachPoint;
                 callout.StartArrow.localRotation = Quaternion.Euler(0f, 0f,
                     Mathf.Atan2(approachDirection.y, approachDirection.x) * Mathf.Rad2Deg);
@@ -337,6 +398,28 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                     callout.Label.anchoredPosition = labelPoint;
                 }
             }
+        }
+
+        private static Color ResolveCustomHitColor(
+            DeathScreenDamageTracker.HitAnatomyRecord anatomy)
+        {
+            if (anatomy.Heart) return Color.green;
+            if (anatomy.Brain) return Color.magenta;
+            if (anatomy.CervicalSpine) return new Color(0.05f, 1f, 0.75f, 1f);
+            if (anatomy.ThoracicSpine) return new Color(1f, 0.78f, 0.05f, 1f);
+            if (anatomy.Skull) return new Color(0.55f, 0.82f, 1f, 1f);
+            if (anatomy.Ribcage) return new Color(0.95f, 0.82f, 0.55f, 1f);
+            return new Color(0.1f, 0.55f, 1f, 1f);
+        }
+
+        private static bool IsInsidePreview(RawImage image, Vector3 viewport)
+        {
+            if (image == null || viewport.z <= 0f)
+                return false;
+            Rect uv = image.uvRect;
+            float x = (viewport.x - uv.x) / uv.width;
+            float y = (viewport.y - uv.y) / uv.height;
+            return x >= 0f && x <= 1f && y >= 0f && y <= 1f;
         }
 
         private static Vector3 ResolveCalloutEnd(StaticHitCallout callout)
@@ -391,7 +474,8 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
 
         private static RectTransform CreateTrajectoryLabel(
             RectTransform container, EBodyPart bodyPart, float depth,
-            bool passedThrough, Color color, out TextMeshProUGUI text)
+            bool passedThrough, DeathScreenDamageTracker.HitAnatomyRecord anatomy,
+            Color color, out TextMeshProUGUI text)
         {
             GameObject labelObject = new GameObject(
                 $"TrajectoryText_{bodyPart}", typeof(RectTransform),
@@ -401,18 +485,48 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
             label.anchorMin = label.anchorMax = new Vector2(0.5f, 0.5f);
             label.sizeDelta = new Vector2(155f, 26f);
             text = labelObject.GetComponent<TextMeshProUGUI>();
-            text.text = depth <= 0f
-                ? $"{bodyPart}  DEPTH N/A"
-                : $"{bodyPart}  {depth * 100f:F0} cm" +
-                    (passedThrough ? "  THROUGH" : string.Empty);
+            text.text = BuildWoundDescription(bodyPart, depth, passedThrough, anatomy);
             text.fontSize = 12f;
             text.fontStyle = FontStyles.Bold;
+            text.enableWordWrapping = false;
+            label.sizeDelta = new Vector2(text.preferredWidth, 26f);
             text.color = color;
             text.raycastTarget = false;
             Outline outline = labelObject.AddComponent<Outline>();
             outline.effectColor = new Color(0f, 0f, 0f, 0.95f);
             outline.effectDistance = new Vector2(1f, -1f);
             return label;
+        }
+
+        private static string BuildWoundDescription(
+            EBodyPart bodyPart, float depth, bool passedThrough,
+            DeathScreenDamageTracker.HitAnatomyRecord anatomy)
+        {
+            string bodyPartName = bodyPart switch
+            {
+                EBodyPart.LeftArm => "Left arm",
+                EBodyPart.RightArm => "Right arm",
+                EBodyPart.LeftLeg => "Left leg",
+                EBodyPart.RightLeg => "Right leg",
+                _ => bodyPart.ToString()
+            };
+            List<string> woundDetails = new();
+            if (anatomy.Heart) woundDetails.Add("Heart");
+            if (anatomy.Brain) woundDetails.Add("Brain");
+            if (anatomy.CervicalSpine) woundDetails.Add("Cervical spine");
+            if (anatomy.ThoracicSpine) woundDetails.Add("Thoracic spine");
+            if (anatomy.Ribcage) woundDetails.Add("Ribcage");
+            if (anatomy.Skull) woundDetails.Add("Skull");
+            if (anatomy.LimbBone) woundDetails.Add("Bone");
+            if (passedThrough) woundDetails.Add("Exit wound");
+
+            string details = woundDetails.Count > 0
+                ? $" ({string.Join(", ", woundDetails)})"
+                : string.Empty;
+            string depthDescription = depth > 0f
+                ? $"{depth * 100f:F0}cm deep"
+                : "Depth unknown";
+            return $"{bodyPartName}{details} {depthDescription}";
         }
 
         private static void UpdateCalloutLine(
@@ -472,8 +586,14 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
                     anchorsByBodyPart,
                     modelPreview);
 
+            RectTransform trajectoryRoot = new GameObject("WoundTrajectories", typeof(RectTransform))
+                .GetComponent<RectTransform>();
+            trajectoryRoot.SetParent(modelPreview.Container, false);
+            trajectoryRoot.anchorMin = Vector2.zero;
+            trajectoryRoot.anchorMax = Vector2.one;
+            trajectoryRoot.offsetMin = trajectoryRoot.offsetMax = Vector2.zero;
             List<StaticHitCallout> trajectoryCallouts = CreateStaticHitCallouts(
-                activeProfile, anchorsByBodyPart, modelPreview.Container,
+                activeProfile, anchorsByBodyPart, trajectoryRoot, modelView.transform,
                 includeLabels: false);
 
             if (bodyPartMarkers.Count == 0)
@@ -490,19 +610,19 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
             if (originalLabel != null)
                 originalLabel.gameObject.SetActive(false);
 
-            while (coroutineHost != null &&
-                   activeRoot != null &&
-                   modelPreview.Image != null &&
-                   modelPreview.Camera != null &&
-                   modelPreview.Container != null &&
-                   activeRoot.activeInHierarchy)
-            {
-                UpdateMarkerPositions(modelPreview, bodyPartMarkers);
-                UpdateStaticHitCallouts(modelPreview, trajectoryCallouts);
-                yield return null;
-            }
-        }
+            DeathScreenAnatomyGraphic anatomy = DeathScreenAnatomyGraphic.Create(
+                modelPreview.Container, modelView.transform, modelPreview.Camera, modelPreview.Image);
 
+            anatomy.UpdateWounds = () =>
+            {
+                if (activeRoot == null || !activeRoot.activeInHierarchy) return;
+                UpdateMarkerPositions(modelPreview, bodyPartMarkers);
+                trajectoryRoot.gameObject.SetActive(Plugin.ShouldShowInspectionTrajectories.Value);
+                if (Plugin.ShouldShowInspectionTrajectories.Value)
+                    UpdateStaticHitCallouts(modelPreview, trajectoryCallouts,
+                        Plugin.ShouldHideInspectionBackHits.Value);
+            };
+        }
         private static ModelPreview FindModelPreview(
             PlayerModelView modelView,
             IReadOnlyDictionary<EBodyPart, Transform> anchorsByBodyPart)
@@ -1092,30 +1212,8 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
             }
         }
 
-        private static Vector2 ConvertViewportToLocal(
-            RawImage image,
-            Vector3 viewport)
-        {
-            Rect rect = image.rectTransform.rect;
-            Rect uv = image.uvRect;
-
-            float x =
-                (viewport.x - uv.x) / uv.width;
-
-            float y =
-                (viewport.y - uv.y) / uv.height;
-
-            return new Vector2(
-                Mathf.Lerp(
-                    rect.xMin,
-                    rect.xMax,
-                    x),
-                Mathf.Lerp(
-                    rect.yMin,
-                    rect.yMax,
-                    y));
-        }
-
+        private static Vector2 ConvertViewportToLocal(RawImage image, Vector3 viewport) =>
+            AnatomyOverlayRenderer.ConvertPreviewPoint(image.rectTransform.rect, image.uvRect, viewport);
         private static Color ResolveBodyPartColor(EBodyPart bodyPart) =>
             bodyPart switch
             {

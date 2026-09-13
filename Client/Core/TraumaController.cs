@@ -80,7 +80,6 @@ namespace TraumaCore
                 if (CountType(BleedType.Light) < LightWoundsForHeavyBleed)
                     return;
 
-                // Reclassifying in place preserves every wound's current clot timer.
                 for (int i = 0; i < _wounds.Count; i++)
                     if (_wounds[i].Type == BleedType.Light)
                         _wounds[i].Type = BleedType.Heavy;
@@ -206,6 +205,7 @@ namespace TraumaCore
         }
         internal struct ImpactCapture
         {
+            internal Vector3 HitNormal;
             internal Vector3 HitPoint, Direction, Intersection, BoneIntersection;
             internal Transform HitTransform;
             internal WoundBallistics Wound;
@@ -529,19 +529,11 @@ namespace TraumaCore
             _lastWoundTrajectory = WoundTrajectory.Create(
                 capture.Wound, direction);
             _lastImpactTransform = capture.HitTransform;
-            if (Plugin.EnableDeathScreenReport.Value)
+            if (Plugin.EnableDeathScreenReport.Value ||
+                Plugin.EnableWoundInspection.Value)
             {
                 Features.DeathScreen.DamageTracking.DeathScreenDamageTracker
-                    .CaptureTrajectory(
-                        _player?.Profile,
-                        _player,
-                        capture.BodyPart,
-                        capture.HitPoint,
-                        direction,
-                        capture.DamageType,
-                        capture.FireIndex,
-                        capture.ProjectileIndex,
-                        capture.Wound);
+                    .CaptureTrajectory(_player?.Profile, _player, capture);
             }
             if (!OrganSystem.DebugEsp.Value)
                 return;
@@ -1297,9 +1289,6 @@ namespace TraumaCore
             if (_health == null || !_health.IsAlive)
                 return;
 
-            // EFT removes every native bleed marker during this buff's
-            // activation. Discard those queued marker events so the same stim
-            // cannot also receive ordinary item treatment on the next update.
             _pendingBleedTreatments.Clear();
             _acceleratedBleedEffects.Clear();
             _chestWounds.AdvanceClotting(BloodLossStimClottingProgress);

@@ -152,17 +152,14 @@ namespace TraumaCore.Patches.Trauma
                     bodyPartType == EBodyPart.Stomach) &&
                     OrganSystem.IntersectsThoracicSpine(__instance, damageInfo.HitPoint,
                         damageInfo.Direction, out thoracicIntersection);
-                bool boneCandidate = OrganSystem.IntersectsLimbBone(__instance,
-                    bodyPartType, damageInfo.HitPoint, damageInfo.Direction,
-                    out __state.BoneIntersection);
                 Vector3 ribIntersection = damageInfo.HitPoint;
                 bool ribCandidate = bodyPartType == EBodyPart.Chest &&
-                    OrganSystem.TryFindRibcageIntersection(__state.Wound,
+                    OrganSystem.TryFindRibcageIntersection(__instance, __state.Wound,
                         damageInfo.Direction, out ribIntersection);
                 Vector3 skullIntersection = damageInfo.HitPoint;
                 bool skullCandidate = bodyPartType == EBodyPart.Head &&
                     rules.BrainEnabled && OrganSystem.TryFindSkullIntersection(
-                        __state.Wound, damageInfo.Direction,
+                        __instance, __state.Wound, damageInfo.Direction,
                         out skullIntersection);
 
                 List<BoneCollision> boneCollisions = new List<BoneCollision>(6);
@@ -179,9 +176,19 @@ namespace TraumaCore.Patches.Trauma
                 if (thoracicSpineCandidate) boneCollisions.Add(new BoneCollision(
                     BoneCollisionType.ThoracicSpine, thoracicIntersection,
                     damageInfo.HitPoint));
-                if (boneCandidate) boneCollisions.Add(new BoneCollision(
-                    BoneCollisionType.Limb, __state.BoneIntersection,
-                    damageInfo.HitPoint));
+                if (LimbBoneGeometry.IsLimb(bodyPartType))
+                {
+                    for (int boneIndex = 0; boneIndex < LimbBoneGeometry.GetBoneCount(bodyPartType); boneIndex++)
+                    {
+                        if (!LimbBoneGeometry.TryGetCylinder(__instance, bodyPartType,
+                                boneIndex, out BoneSegmentPose cylinder) ||
+                            !AnatomyIntersections.TryIntersectCylinder(cylinder,
+                                damageInfo.HitPoint, damageInfo.Direction, out AnatomyHit boneHit))
+                            continue;
+                        boneCollisions.Add(new BoneCollision(BoneCollisionType.Limb,
+                            boneHit.Point, damageInfo.HitPoint));
+                    }
+                }
                 boneCollisions.Sort((left, right) =>
                     left.Distance.CompareTo(right.Distance));
                 for (int i = 0; i < boneCollisions.Count; i++)
@@ -215,6 +222,8 @@ namespace TraumaCore.Patches.Trauma
                             __state.ThoracicSpine = true;
                             break;
                         case BoneCollisionType.Limb:
+                            if (!__state.Bone)
+                                __state.BoneIntersection = collision.Point;
                             __state.Bone = true;
                             break;
                     }
@@ -227,24 +236,29 @@ namespace TraumaCore.Patches.Trauma
                     __state.Wound.CalculateFragmentDamageBonus(
                         __state.OriginalDamage);
 
-                bool organHit = organ != null && organ.IntersectsShot(__instance,
-                    damageInfo.HitPoint, damageInfo.Direction,
-                    out __state.OrganIntersection, out __state.Distance,
-                    out __state.OrganExitDistance) &&
-                    CanReachInternalPoint(__state.Wound, __state.Distance);
-                if (bodyPartType == EBodyPart.Head && rules.BrainEnabled &&
-                    OrganSystem.LowerBrain.IntersectsShot(__instance,
+                bool organHit;
+                if (bodyPartType == EBodyPart.Head && rules.BrainEnabled)
+                    organHit = OrganSystem.TryFindBrainIntersection(__instance,
                         damageInfo.HitPoint, damageInfo.Direction,
-                        out Vector3 lowerIntersection, out float lowerDistance) &&
-                    CanReachInternalPoint(__state.Wound, lowerDistance) &&
-                    (!organHit || lowerDistance < __state.Distance))
-                {
-                    organHit = true;
-                    __state.OrganIntersection = lowerIntersection;
-                    __state.Distance = lowerDistance;
-                }
+                        out __state.OrganIntersection, out __state.Distance,
+                        out __state.OrganExitDistance) &&
+                        CanReachInternalPoint(__state.Wound, __state.Distance);
+                else
+                    organHit = organ != null && organ.IntersectsShot(__instance,
+                        damageInfo.HitPoint, damageInfo.Direction,
+                        out __state.OrganIntersection, out __state.Distance,
+                        out __state.OrganExitDistance) &&
+                        CanReachInternalPoint(__state.Wound, __state.Distance);
                 __state.Heart = bodyPartType == EBodyPart.Chest && organHit;
                 __state.Brain = bodyPartType == EBodyPart.Head && organHit;
+                if (bodyPartType == EBodyPart.Head &&
+                    OrganSystem.IsEntireHeadFatal.Value)
+                {
+                    __state.Brain = true;
+                    __state.OrganIntersection = damageInfo.HitPoint;
+                    __state.Distance = 0f;
+                    __state.OrganExitDistance = 0f;
+                }
                 if (__state.UpperSpine)
                 {
                     __state.Brain = true;
@@ -257,6 +271,14 @@ namespace TraumaCore.Patches.Trauma
                     __state.OrganIntersection = thoracicIntersection;
                     __state.Distance = Vector3.Distance(damageInfo.HitPoint,
                         thoracicIntersection);
+                }
+                if (!__state.Heart && !__state.Brain &&
+                    !__state.UpperSpine && !__state.ThoracicSpine)
+                {
+                    if (__state.Skull)
+                        __state.OrganIntersection = skullIntersection;
+                    else if (__state.Ribcage)
+                        __state.OrganIntersection = ribIntersection;
                 }
                 __state.Multiplier = OrganSystem.DirectDamagePercent.Value *
                     __state.TargetMultiplier *
@@ -350,6 +372,7 @@ namespace TraumaCore.Patches.Trauma
                     trauma.CaptureImpact(new TraumaController.ImpactCapture
                 {
                     HitPoint = __state.HitPoint,
+                    HitNormal = __state.HitNormal,
                     Direction = __state.Direction,
                     Intersection = __state.OrganIntersection,
                     Heart = __state.Heart,

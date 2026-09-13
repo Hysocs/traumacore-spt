@@ -24,6 +24,10 @@ namespace TraumaCore
 
         internal static ManualLogSource Log { get; private set; }
         internal static ConfigEntry<bool> EnableWoundInspection { get; private set; }
+        internal static ConfigEntry<bool> ShouldShowInspectionTrajectories { get; private set; }
+        internal static ConfigEntry<bool> ShouldShowInspectionAnatomy { get; private set; }
+        internal static ConfigEntry<bool> ShouldShowInspectionAnchors { get; private set; }
+        internal static ConfigEntry<bool> ShouldHideInspectionBackHits { get; private set; }
         internal static ConfigEntry<bool> EnableCorpseDragging { get; private set; }
         internal static ConfigEntry<bool> EnableCustomFragmentation { get; private set; }
         internal static ConfigEntry<bool> EnableHitPressure { get; private set; }
@@ -31,18 +35,15 @@ namespace TraumaCore
         internal static ConfigEntry<bool> EnablePersistentBloodDecals { get; private set; }
         internal static ConfigEntry<bool> EnableTraumaPresentation { get; private set; }
 
-        private readonly List<LineCommand> _lines = new List<LineCommand>(2048);
+        private readonly List<AnatomyScreenLine> _lines = new List<AnatomyScreenLine>(2048);
+        private readonly List<AnatomyOverlayLine> _anatomyLines =
+            new List<AnatomyOverlayLine>(2048);
         private readonly List<BloodQuadCommand> _bloodQuads = new List<BloodQuadCommand>(512);
         private readonly List<WorldBloodCommand> _worldBlood = new List<WorldBloodCommand>(512);
         private readonly List<TraumaController.DebugBloodParticle> _particleBlood =
             new List<TraumaController.DebugBloodParticle>(1024);
         private readonly List<Text> _debugLabels = new List<Text>(32);
         private readonly StringBuilder _debugText = new StringBuilder(256);
-        private readonly Vector2[] _boxPoints = new Vector2[8];
-        private static readonly int[] BoxEdgeStart =
-            { 0, 2, 4, 6, 0, 1, 4, 5, 0, 1, 2, 3 };
-        private static readonly int[] BoxEdgeEnd =
-            { 1, 3, 5, 7, 2, 3, 6, 7, 4, 5, 6, 7 };
         private const int EllipsoidSegments = 36;
         private static readonly float[] CircleCos = BuildCircleTable(true);
         private static readonly float[] CircleSin = BuildCircleTable(false);
@@ -84,7 +85,9 @@ namespace TraumaCore
             Log = Logger;
             BindDefaultPreset();
             BindFeatureToggles();
+            BindWoundInspectionSettings();
             OrganSystem.InitializeOrganSettings(Config);
+            BindCalibrationPoseButtons();
             BindEffectTestButtons();
             _patchManager = new PatchManager(this, autoPatch: true);
             _patchManager.EnablePatches();
@@ -176,6 +179,34 @@ namespace TraumaCore
                 "Control repeated trauma audio, screen blood, and death voices.");
         }
 
+        private void BindWoundInspectionSettings()
+        {
+            ShouldShowInspectionTrajectories = BindWoundInspectionSetting(
+                "Show Trajectories", true, 40,
+                "Show bullet trajectories when inspecting wounds.");
+            ShouldShowInspectionAnatomy = BindWoundInspectionSetting(
+                "Show Anatomy", false, 30,
+                "Show anatomy geometry when inspecting wounds.");
+            ShouldShowInspectionAnchors = BindWoundInspectionSetting(
+                "Show Anchors", false, 20,
+                "Show ragdoll anchors when inspecting wounds.");
+            ShouldHideInspectionBackHits = BindWoundInspectionSetting(
+                "Hide Back Hits", false, 10,
+                "Hide wound markers on the far side of the inspected body.");
+        }
+
+        private ConfigEntry<bool> BindWoundInspectionSetting(
+            string key, bool defaultValue, int order, string description)
+        {
+            return Config.Bind("Wound Inspection", key, defaultValue,
+                new ConfigDescription(description, null,
+                    new ConfigurationManagerAttributes
+                    {
+                        Category = "Wound Inspection",
+                        Order = order
+                    }));
+        }
+
         private ConfigEntry<bool> BindFeatureToggle(string key,
             bool defaultValue, string displayName, int order,
             string description)
@@ -204,6 +235,7 @@ namespace TraumaCore
 
         private void Update()
         {
+            UpdateCalibrationMannequin();
             UpdateBloodParticlesIndependent();
             if (_world != null && _localPlayer != null)
                 return;
@@ -280,6 +312,7 @@ namespace TraumaCore
             if (_bloodParticleSystem != null) _bloodParticleSystem.Clear(false);
             if (_bloodParticleRenderer != null) _bloodParticleRenderer.enabled = false;
             OrganSystem.ClearLimbBoneCache();
+            RemoveCalibrationMannequin();
             ClearOverlay();
         }
 
@@ -329,6 +362,7 @@ namespace TraumaCore
             _lines.Clear();
             _bloodQuads.Clear();
             _worldBlood.Clear();
+            AddCalibrationMannequinOverlay();
             int labelCount = 0;
             Vector3 localPosition = _localPlayer.Transform.position;
             float rangeSq = OrganSystem.DebugEspRange.Value *
@@ -351,25 +385,10 @@ namespace TraumaCore
                     { nearest = player; nearestDistanceSq = distanceSq; }
 
                     if (!debugEsp || OrganSystem.GetChestAnchor(player) == null) continue;
-                    Vector2 labelPosition;
                     TargetRules rules = OrganSystem.GetTargetRules(player);
                     if (rules.BodyTraumaEnabled)
                     {
-                        if (rules.HeartEnabled)
-                            AddOrganShape(player, OrganSystem.Heart, out labelPosition);
-                        if (rules.BrainEnabled)
-                        {
-                            AddOrganShape(player, OrganSystem.Brain, out labelPosition);
-                            AddOrganShape(player, OrganSystem.LowerBrain, out labelPosition);
-                            AddInsetBodyPartMesh(player, EBodyPart.Head,
-                                OrganSystem.SkullMinimumDepth,
-                                new Color(0.82f, 0.88f, 1f,
-                                    OrganSystem.BoneEspOpacity.Value));
-                        }
-                        if (rules.CervicalSpineEnabled) AddUpperSpine(player);
-                        if (rules.ThoracicSpineEnabled) AddThoracicSpine(player);
-                        AddChestColliderVolume(player);
-                        AddLimbBones(player);
+                        AddAnatomyGeometry(player, rules);
                         AddImpactGeometry(trauma);
                     }
                 }
@@ -399,80 +418,11 @@ namespace TraumaCore
                 (player.Transform.position - localPosition).sqrMagnitude <= rangeSq;
         }
 
-        private bool AddOrganShape(Player player, OrganDefinition organ, out Vector2 labelPosition)
+        private void AddAnatomyGeometry(Player player, TargetRules rules)
         {
-            if (organ.Shape == OrganShape.Ellipsoid)
-                return AddOrganEllipsoid(player, organ, out labelPosition);
-            labelPosition = default(Vector2);
-            Vector3 center = organ.WorldCenter(player);
-            Transform anchor = organ.GetAnchor(player);
-            if (anchor == null) return false;
-            Quaternion rotation = organ.WorldRotation(player);
-            Color organColor = GetOrganEspColor(organ);
-            Vector3 axisRight = rotation * Vector3.right;
-            Vector3 axisUp = rotation * Vector3.up;
-            Vector3 axisForward = rotation * Vector3.forward;
-
-            float top = float.MinValue;
-            for (int i = 0; i < 8; i++)
-            {
-                Vector3 sign = new Vector3((i & 1) == 0 ? -1f : 1f,
-                    (i & 2) == 0 ? -1f : 1f, (i & 4) == 0 ? -1f : 1f);
-                Vector3 corner = center + axisRight * organ.HalfExtents.x * sign.x +
-                    axisUp * organ.HalfExtents.y * sign.y +
-                    axisForward * organ.HalfExtents.z * sign.z;
-                Vector3 projected = _camera.WorldToScreenPoint(corner);
-                if (projected.z <= 0f || !TryScreenPointToCanvas(projected, out _boxPoints[i])) return false;
-                top = Mathf.Max(top, _boxPoints[i].y);
-            }
-
-            for (int i = 0; i < BoxEdgeStart.Length; i++)
-                _lines.Add(new LineCommand(_boxPoints[BoxEdgeStart[i]],
-                    _boxPoints[BoxEdgeEnd[i]], organColor, 2f));
-            labelPosition = new Vector2((_boxPoints[2].x + _boxPoints[3].x +
-                _boxPoints[6].x + _boxPoints[7].x) * 0.25f, top);
-            return true;
-        }
-
-        private bool AddOrganEllipsoid(Player player, OrganDefinition organ,
-            out Vector2 labelPosition)
-        {
-            labelPosition = default(Vector2);
-            Transform anchor = organ.GetAnchor(player);
-            if (anchor == null) return false;
-            Vector3 center = organ.WorldCenter(player);
-            Vector3 e = organ.HalfExtents;
-            Quaternion rotation = organ.WorldRotation(player);
-            Color organColor = GetOrganEspColor(organ);
-            float top = float.MinValue;
-            float sumX = 0f;
-            int projectedCount = 0;
-
-            for (int ring = 0; ring < 3; ring++)
-            {
-                Vector2 first = default(Vector2), previous = default(Vector2);
-                for (int i = 0; i <= EllipsoidSegments; i++)
-                {
-                    float c = CircleCos[i], s = CircleSin[i];
-                    Vector3 local = ring == 0 ? new Vector3(e.x * c, e.y * s, 0f) :
-                        ring == 1 ? new Vector3(e.x * c, 0f, e.z * s) :
-                        new Vector3(0f, e.y * c, e.z * s);
-                    Vector3 world = center + rotation * local;
-                    Vector3 screen = _camera.WorldToScreenPoint(world);
-                    Vector2 point;
-                    if (screen.z <= 0f || !TryScreenPointToCanvas(screen, out point)) return false;
-                    if (i == 0) first = point;
-                    else _lines.Add(new LineCommand(previous, point,
-                        organColor, 2f));
-                    previous = point;
-                    if (ring == 0 && i < EllipsoidSegments)
-                    {
-                        top = Mathf.Max(top, point.y); sumX += point.x; projectedCount++;
-                    }
-                }
-            }
-            labelPosition = new Vector2(projectedCount > 0 ? sumX / projectedCount : 0f, top);
-            return true;
+            _anatomyLines.Clear();
+            AnatomyOverlayGeometry.Build(player, rules, _anatomyLines);
+            AnatomyOverlayRenderer.AppendGeometry(_camera, _canvasRect, _anatomyLines, _lines);
         }
 
         private void AddImpactGeometry(TraumaController trauma)
@@ -542,26 +492,6 @@ namespace TraumaCore
                     AddWorldLine(impact.HitPoint, impact.BoneIntersection,
                         limbBone, 5f);
                     AddWorldSphere(impact.BoneIntersection, 0.012f, limbBone);
-                }
-                if (!impact.ArmorStopped && impact.Ribcage &&
-                    impact.Trajectory.HasPath)
-                {
-                    Vector3 ribIntersection = impact.Trajectory.EntryPoint +
-                        impact.Trajectory.EntryDirection *
-                        OrganSystem.RibcageMinimumDepth;
-                    Color ribColor = new Color(1f, 0.78f, 0.12f, 1f);
-                    AddWorldSphere(ribIntersection, 0.014f, ribColor);
-                    AddWorldMarker(ribIntersection, Color.white, 0.028f);
-                }
-                if (!impact.ArmorStopped && impact.Skull &&
-                    impact.Trajectory.HasPath)
-                {
-                    Vector3 skullIntersection = impact.Trajectory.EntryPoint +
-                        impact.Trajectory.EntryDirection *
-                        OrganSystem.SkullMinimumDepth;
-                    Color skullColor = new Color(0.55f, 0.82f, 1f, 1f);
-                    AddWorldSphere(skullIntersection, 0.012f, skullColor);
-                    AddWorldMarker(skullIntersection, Color.white, 0.026f);
                 }
             }
         }
@@ -700,15 +630,6 @@ namespace TraumaCore
             return string.IsNullOrEmpty(targets) ? target : targets + " + " + target;
         }
 
-        private static Color GetOrganEspColor(OrganDefinition organ)
-        {
-            Color color = organ.Color;
-            color.a = organ == OrganSystem.Heart
-                ? OrganSystem.HeartEspOpacity.Value
-                : OrganSystem.BrainEspOpacity.Value;
-            return color;
-        }
-
         private void AddWorldSphere(Vector3 center, float radius, Color color)
         {
             for (int ring = 0; ring < 3; ring++)
@@ -765,7 +686,7 @@ namespace TraumaCore
             Vector2 delta = localEnd - localStart;
             if (delta.sqrMagnitude < 0.01f) return;
             Vector2 normal = new Vector2(-delta.y, delta.x).normalized * thickness * 0.5f;
-            _lines.Add(new LineCommand(localStart, localEnd,
+            _lines.Add(new AnatomyScreenLine(localStart, localEnd,
                 new Color(0.55f, 0.005f, 0.01f, 0.92f),
                 Mathf.Max(1f, thickness * 0.32f)));
             if (_nativeBloodTexture != null)
@@ -1063,158 +984,6 @@ namespace TraumaCore
             }
         }
 
-        private void AddLimbBones(Player player)
-        {
-            float opacity = OrganSystem.BoneEspOpacity.Value;
-            AddLimbBones(player, EBodyPart.LeftArm,
-                new Color(0.1f, 0.85f, 1f, opacity));
-            AddLimbBones(player, EBodyPart.RightArm,
-                new Color(0.1f, 0.85f, 1f, opacity));
-            AddLimbBones(player, EBodyPart.LeftLeg,
-                new Color(0.2f, 1f, 0.55f, opacity));
-            AddLimbBones(player, EBodyPart.RightLeg,
-                new Color(0.2f, 1f, 0.55f, opacity));
-        }
-
-        private void AddChestColliderVolume(Player player)
-        {
-            Color ribColor = new Color(0.95f, 0.82f, 0.55f,
-                OrganSystem.RibcageEspOpacity.Value);
-            AddInsetBodyPartMesh(player, EBodyPart.Chest,
-                OrganSystem.RibcageMinimumDepth, ribColor);
-        }
-
-        private void AddInsetBodyPartMesh(Player player, EBodyPart bodyPart,
-            float inset, Color color)
-        {
-            if (!OrganSystem.TryGetBodyPartBounds(player, bodyPart,
-                out Bounds bounds)) return;
-            Vector3 right = player.Transform.right.normalized;
-            Vector3 up = player.Transform.up.normalized;
-            Vector3 forward = player.Transform.forward.normalized;
-            Vector3 worldExtents = bounds.extents;
-            Vector3 radii = new Vector3(
-                Mathf.Max(0.01f, ProjectBoundsExtent(worldExtents, right) - inset),
-                Mathf.Max(0.01f, ProjectBoundsExtent(worldExtents, up) - inset),
-                Mathf.Max(0.01f, ProjectBoundsExtent(worldExtents, forward) - inset));
-
-            const int latitudeBands = 5;
-            for (int latitudeIndex = 0; latitudeIndex < latitudeBands;
-                latitudeIndex++)
-            {
-                float latitude = Mathf.Lerp(-Mathf.PI / 3f, Mathf.PI / 3f,
-                    latitudeIndex / (latitudeBands - 1f));
-                float ringScale = Mathf.Cos(latitude);
-                float height = Mathf.Sin(latitude) * radii.y;
-                Vector3 previous = default;
-                for (int segment = 0; segment <= EllipsoidSegments; segment++)
-                {
-                    Vector3 point = bounds.center + up * height +
-                        right * (CircleCos[segment] * radii.x * ringScale) +
-                        forward * (CircleSin[segment] * radii.z * ringScale);
-                    if (segment > 0) AddWorldLine(previous, point, color, 2f);
-                    previous = point;
-                }
-            }
-
-            const int longitudeBands = 12;
-            const int verticalSegments = 18;
-            for (int longitudeIndex = 0; longitudeIndex < longitudeBands;
-                longitudeIndex++)
-            {
-                float longitude = longitudeIndex * Mathf.PI * 2f /
-                    longitudeBands;
-                float longitudeCos = Mathf.Cos(longitude);
-                float longitudeSin = Mathf.Sin(longitude);
-                Vector3 previous = default;
-                for (int verticalIndex = 0; verticalIndex <= verticalSegments;
-                    verticalIndex++)
-                {
-                    float latitude = Mathf.Lerp(-Mathf.PI / 2f,
-                        Mathf.PI / 2f, verticalIndex / (float)verticalSegments);
-                    float latitudeCos = Mathf.Cos(latitude);
-                    Vector3 point = bounds.center +
-                        up * (Mathf.Sin(latitude) * radii.y) +
-                        right * (longitudeCos * latitudeCos * radii.x) +
-                        forward * (longitudeSin * latitudeCos * radii.z);
-                    if (verticalIndex > 0)
-                        AddWorldLine(previous, point, color, 2f);
-                    previous = point;
-                }
-            }
-        }
-
-        private static float ProjectBoundsExtent(Vector3 boundsExtents,
-            Vector3 axis) => Mathf.Abs(axis.x) * boundsExtents.x +
-            Mathf.Abs(axis.y) * boundsExtents.y +
-            Mathf.Abs(axis.z) * boundsExtents.z;
-
-        private void AddUpperSpine(Player player)
-        {
-            Vector3 brainBase, chestTop;
-            if (!OrganSystem.TryGetUpperSpineSegment(player, out brainBase, out chestTop)) return;
-            Color color = new Color(0.05f, 1f, 0.75f,
-                OrganSystem.BoneEspOpacity.Value);
-            AddWorldBoneSegment(brainBase, chestTop, OrganSystem.UpperSpineRadius, color);
-            AddWorldMarker(brainBase, color, 0.012f);
-            AddWorldMarker(chestTop, color, 0.012f);
-        }
-
-        private void AddThoracicSpine(Player player)
-        {
-            Vector3 chestTop, stomachTop;
-            if (!OrganSystem.TryGetThoracicSpineSegment(player, out chestTop, out stomachTop)) return;
-            Color color = new Color(1f, 0.78f, 0.05f,
-                OrganSystem.BoneEspOpacity.Value);
-            AddWorldBoneSegment(chestTop, stomachTop, OrganSystem.ThoracicSpineRadius, color);
-            AddWorldMarker(chestTop, color, 0.012f);
-            AddWorldMarker(stomachTop, color, 0.012f);
-        }
-
-        private void AddLimbBones(Player player, EBodyPart bodyPart, Color color)
-        {
-            Transform a, b, c, d;
-            if (!OrganSystem.TryGetBoneSegments(player, bodyPart, out a, out b, out c, out d)) return;
-            float radius = bodyPart == EBodyPart.LeftArm || bodyPart == EBodyPart.RightArm
-                ? OrganSystem.ArmBoneRadius : OrganSystem.LegBoneRadius;
-            if (a != null && b != null)
-            {
-                AddWorldBoneSegment(a.position, b.position, radius, color);
-                AddWorldMarker(a.position, color, 0.012f); AddWorldMarker(b.position, color, 0.012f);
-            }
-            if (c != null && d != null)
-            {
-                AddWorldBoneSegment(c.position, d.position, radius, color);
-                AddWorldMarker(c.position, color, 0.012f); AddWorldMarker(d.position, color, 0.012f);
-            }
-            if ((bodyPart == EBodyPart.LeftLeg || bodyPart == EBodyPart.RightLeg) &&
-                b != null && c != null && b != c)
-            {
-                AddWorldBoneSegment(b.position, c.position, radius, color);
-                AddWorldMarker(b.position, color, 0.012f);
-                AddWorldMarker(c.position, color, 0.012f);
-            }
-        }
-
-        private void AddWorldBoneSegment(Vector3 start, Vector3 end,
-            float worldRadius, Color color)
-        {
-            Vector3 screenStart = _camera.WorldToScreenPoint(start);
-            Vector3 screenEnd = _camera.WorldToScreenPoint(end);
-            Vector3 midpoint = (start + end) * 0.5f;
-            Vector3 screenMid = _camera.WorldToScreenPoint(midpoint);
-            Vector3 screenRadius = _camera.WorldToScreenPoint(
-                midpoint + _camera.transform.right * worldRadius);
-            Vector2 localStart, localEnd, localMid, localRadius;
-            if (screenStart.z <= 0f || screenEnd.z <= 0f || screenMid.z <= 0f ||
-                screenRadius.z <= 0f || !TryScreenPointToCanvas(screenStart, out localStart) ||
-                !TryScreenPointToCanvas(screenEnd, out localEnd) ||
-                !TryScreenPointToCanvas(screenMid, out localMid) ||
-                !TryScreenPointToCanvas(screenRadius, out localRadius)) return;
-            float diameterPixels = Mathf.Clamp(Vector2.Distance(localMid, localRadius) * 2f, 0.75f, 80f);
-            _lines.Add(new LineCommand(localStart, localEnd, color, diameterPixels));
-        }
-
         private void AddWorldLine(Vector3 start, Vector3 end, Color color, float thickness)
         {
             Vector3 a = _camera.WorldToScreenPoint(start);
@@ -1222,7 +991,7 @@ namespace TraumaCore
             Vector2 localA, localB;
             if (a.z <= 0f || b.z <= 0f || !TryScreenPointToCanvas(a, out localA) ||
                 !TryScreenPointToCanvas(b, out localB)) return;
-            _lines.Add(new LineCommand(localA, localB, color, thickness));
+            _lines.Add(new AnatomyScreenLine(localA, localB, color, thickness));
         }
 
         private void AddWorldMarker(Vector3 point, Color color, float worldSize)
@@ -1490,6 +1259,7 @@ namespace TraumaCore
             _shuttingDown = true;
             HitPressureVignette.RemoveOverlay();
             Canvas.preWillRenderCanvases -= RenderFrame;
+            RemoveCalibrationMannequin();
             DetachWorld();
             if (_patchManager != null) _patchManager.DisablePatches();
             if (_canvas != null) Destroy(_canvas.gameObject);
@@ -1501,12 +1271,7 @@ namespace TraumaCore
             Log = null;
         }
 
-        private struct LineCommand
-        {
-            public readonly Vector2 Start, End; public readonly Color Color; public readonly float Thickness;
-            public LineCommand(Vector2 start, Vector2 end, Color color, float thickness)
-            { Start = start; End = end; Color = color; Thickness = thickness; }
-        }
+
 
         private struct BloodQuadCommand
         {
@@ -1526,22 +1291,12 @@ namespace TraumaCore
 
         private sealed class OrganGraphic : Graphic
         {
-            private IList<LineCommand> _lines;
-            public void SetGeometry(IList<LineCommand> lines) { _lines = lines; SetVerticesDirty(); }
+            private IList<AnatomyScreenLine> _lines;
+            public void SetGeometry(IList<AnatomyScreenLine> lines) { _lines = lines; SetVerticesDirty(); }
             public void Clear() { _lines = null; SetVerticesDirty(); }
-            protected override void OnPopulateMesh(VertexHelper vh)
+            protected override void OnPopulateMesh(VertexHelper vertices)
             {
-                vh.Clear(); if (_lines == null) return;
-                for (int i = 0; i < _lines.Count; i++)
-                {
-                    LineCommand line = _lines[i]; Vector2 delta = line.End - line.Start;
-                    if (delta.sqrMagnitude < 0.01f) continue;
-                    Vector2 normal = new Vector2(-delta.y, delta.x).normalized * line.Thickness * 0.5f;
-                    int v = vh.currentVertCount;
-                    vh.AddVert(line.Start - normal, line.Color, Vector2.zero); vh.AddVert(line.Start + normal, line.Color, Vector2.zero);
-                    vh.AddVert(line.End + normal, line.Color, Vector2.zero); vh.AddVert(line.End - normal, line.Color, Vector2.zero);
-                    vh.AddTriangle(v, v + 1, v + 2); vh.AddTriangle(v, v + 2, v + 3);
-                }
+                AnatomyOverlayRenderer.PopulateMesh(vertices, _lines);
             }
         }
 

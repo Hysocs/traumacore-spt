@@ -31,19 +31,42 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
 
         internal static IEnumerable<EBodyPart> BodyParts => NamesByBodyPart.Keys;
 
+        internal static Transform FindImpactAnchor(Player player, EBodyPart bodyPart, Vector3 point)
+        {
+            Transform fallback = Find(player.Transform.Original, bodyPart);
+            if (!OrganSystem.TryGetBoneSegments(player, bodyPart, out Transform upperStart,
+                out Transform upperEnd, out Transform lowerStart, out Transform lowerEnd)) return fallback;
+            bool isLeg = bodyPart == EBodyPart.LeftLeg || bodyPart == EBodyPart.RightLeg;
+            if (isLeg && lowerStart != null) upperEnd = lowerStart;
+            Transform nearest = fallback;
+            float distance = float.MaxValue;
+            CaptureSegment(upperStart, upperEnd);
+            CaptureSegment(lowerStart, lowerEnd);
+            return nearest;
+
+            void CaptureSegment(Transform start, Transform end)
+            {
+                if (start == null || end == null) return;
+                Vector3 axis = end.position - start.position;
+                if (axis.sqrMagnitude < 0.000001f) return;
+                Vector3 closest = start.position + axis * Mathf.Clamp01(
+                    Vector3.Dot(point - start.position, axis) / axis.sqrMagnitude);
+                float candidate = (point - closest).sqrMagnitude;
+                if (candidate >= distance) return;
+                distance = candidate;
+                nearest = start;
+            }
+        }
+
+        internal static Transform ResolveRecordedAnchor(Transform[] meshBones,
+            string name, Transform fallback) => string.IsNullOrEmpty(name) ? fallback :
+            FindMatchingTransform(meshBones, new[] { name }) ?? fallback;
+
         internal static void ClearLiveAnchorCache() => CachedAnchorsByRoot.Clear();
 
         internal static Dictionary<EBodyPart, Transform> Resolve(PlayerModelView modelView)
         {
-            Transform[] transforms = modelView.GetComponentsInChildren<Transform>(true);
-            Dictionary<EBodyPart, Transform> anchorsByBodyPart = new();
-
-            foreach (KeyValuePair<EBodyPart, string[]> entry in NamesByBodyPart)
-            {
-                Transform anchor = FindMatchingTransform(transforms, entry.Value);
-                if (anchor != null)
-                    anchorsByBodyPart[entry.Key] = anchor;
-            }
+            Dictionary<EBodyPart, Transform> anchorsByBodyPart = ResolveHierarchyAnchors(modelView.transform);
 
             Animator animator = modelView
                 .GetComponentsInChildren<Animator>(true)
@@ -83,10 +106,12 @@ namespace TraumaCore.Features.DeathScreen.HitMarkers
         private static Dictionary<EBodyPart, Transform> ResolveHierarchyAnchors(Transform root)
         {
             Transform[] transforms = root.GetComponentsInChildren<Transform>(true);
+            Transform[] meshBones = MeshSkeleton.ResolveBones(root);
             Dictionary<EBodyPart, Transform> anchorsByBodyPart = new();
             foreach (KeyValuePair<EBodyPart, string[]> entry in NamesByBodyPart)
             {
-                Transform anchor = FindMatchingTransform(transforms, entry.Value);
+                Transform anchor = FindMatchingTransform(meshBones, entry.Value) ??
+                    FindMatchingTransform(transforms, entry.Value);
                 if (anchor != null)
                     anchorsByBodyPart.Add(entry.Key, anchor);
             }

@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using BepInEx.Configuration;
 using EFT;
 using EFT.CameraControl;
 using EFT.InputSystem;
@@ -69,7 +70,7 @@ namespace TraumaCore.Features.WoundInspection
         private float _emptyHandsRequestExpires;
         private bool _isRagdollReady;
         private bool _originalPutToSleep;
-        private bool _shouldShowTrajectories = true;
+        private readonly Dictionary<Toggle, ConfigEntry<bool>> _settingsByToggle = new();
         private CorpseWeaponLink.DetachedWeapon _detachedWeapon;
         private bool _isInputNodeRegistered;
         private bool _isUiEventSystemEnabled;
@@ -141,13 +142,15 @@ namespace TraumaCore.Features.WoundInspection
             ActivateNativeRagdoll();
             UnequipLocalPlayerHands(localPlayer);
             CreateOrganOverlay(corpsePlayer);
+            LogCorpseAnatomyPose(corpsePlayer);
             CreateAnchorOverlay();
             AddCorpseInteraction(inputSurface);
             AddZoom(inputSurface);
             DeathScreenHitMarkerPresenter.ShowStaticCorpsePreview(
                 this, gameObject, _camera, inputSurface, corpse.transform,
                 corpsePlayer.Profile,
-                () => _shouldShowTrajectories);
+                () => Plugin.ShouldShowInspectionTrajectories.Value,
+                () => Plugin.ShouldHideInspectionBackHits.Value);
             TraumaLog.Info(
                 $"[WoundInspection] Inspecting live EFT corpse ragdoll with " +
                 $"{_ragdoll._rigidbodySpawners.Length} bodies");
@@ -156,6 +159,7 @@ namespace TraumaCore.Features.WoundInspection
         private void Update()
         {
             RequestEmptyHands();
+            UpdateOverlaySettings();
         }
 
         private bool CanActivateRagdoll()
@@ -541,24 +545,31 @@ namespace TraumaCore.Features.WoundInspection
 
         private void CreateOverlayToggles(TMP_Text template)
         {
-            CreateOverlayToggle(template, "TRAJECTORIES", -132f, true,
-                value => _shouldShowTrajectories = value);
-            CreateOverlayToggle(template, "ORGANS", -178f, false,
-                value =>
-                {
-                    if (_organGraphic != null)
-                        _organGraphic.enabled = value;
-                    TraumaLog.Info(
-                        $"[WoundInspection] {(value ? "Showing" : "Hiding")} " +
-                        "F12 organ geometry");
-                });
-            CreateOverlayToggle(template, "ANCHORS", -224f, false,
-                value => ApplyOverlayVisibility("anchors", _anchorRenderers, value));
+            CreateOverlayToggle(template, "TRAJECTORIES", -132f,
+                Plugin.ShouldShowInspectionTrajectories);
+            CreateOverlayToggle(template, "ANATOMY", -178f,
+                Plugin.ShouldShowInspectionAnatomy);
+            CreateOverlayToggle(template, "ANCHORS", -224f,
+                Plugin.ShouldShowInspectionAnchors);
+            CreateOverlayToggle(template, "HIDE BACK HITS", -270f,
+                Plugin.ShouldHideInspectionBackHits);
+        }
+
+        private void UpdateOverlaySettings()
+        {
+            foreach (KeyValuePair<Toggle, ConfigEntry<bool>> setting in _settingsByToggle)
+                setting.Key.SetIsOnWithoutNotify(setting.Value.Value);
+
+            if (_organGraphic != null)
+                _organGraphic.enabled = Plugin.ShouldShowInspectionAnatomy.Value;
+            if (_anchorRenderers.Count > 0 &&
+                _anchorRenderers[0].enabled != Plugin.ShouldShowInspectionAnchors.Value)
+                ApplyOverlayVisibility("anchors", _anchorRenderers,
+                    Plugin.ShouldShowInspectionAnchors.Value);
         }
 
         private void CreateOverlayToggle(
-            TMP_Text template, string labelText, float y, bool initialValue,
-            UnityEngine.Events.UnityAction<bool> applyValue)
+            TMP_Text template, string labelText, float y, ConfigEntry<bool> setting)
         {
             GameObject toggleObject = new GameObject(
                 labelText + "Toggle", typeof(RectTransform), typeof(Toggle));
@@ -598,8 +609,9 @@ namespace TraumaCore.Features.WoundInspection
             Toggle toggle = toggleObject.GetComponent<Toggle>();
             toggle.targetGraphic = boxImage;
             toggle.graphic = checkImage;
-            toggle.isOn = initialValue;
-            toggle.onValueChanged.AddListener(applyValue);
+            toggle.SetIsOnWithoutNotify(setting.Value);
+            toggle.onValueChanged.AddListener(value => setting.Value = value);
+            _settingsByToggle.Add(toggle, setting);
         }
 
         private void CreateAnchorOverlay()
@@ -618,7 +630,7 @@ namespace TraumaCore.Features.WoundInspection
                 marker.GetComponent<MeshFilter>().sharedMesh = mesh;
                 MeshRenderer renderer = marker.GetComponent<MeshRenderer>();
                 renderer.sharedMaterial = material;
-                renderer.enabled = false;
+                renderer.enabled = Plugin.ShouldShowInspectionAnchors.Value;
                 _anchorRenderers.Add(renderer);
             }
         }
@@ -626,7 +638,7 @@ namespace TraumaCore.Features.WoundInspection
         private void CreateOrganOverlay(Player corpsePlayer)
         {
             GameObject drawing = new GameObject(
-                "InspectionF12Organs", typeof(RectTransform),
+                "InspectionF12Anatomy", typeof(RectTransform),
                 typeof(CanvasRenderer), typeof(InspectionOrganGraphic));
             drawing.transform.SetParent(transform, false);
             RectTransform rect = (RectTransform)drawing.transform;
@@ -635,9 +647,76 @@ namespace TraumaCore.Features.WoundInspection
             rect.offsetMin = Vector2.zero;
             rect.offsetMax = Vector2.zero;
             _organGraphic = drawing.GetComponent<InspectionOrganGraphic>();
-            _organGraphic.Configure(_camera, corpsePlayer);
+            AnatomyRig rig = AnatomyRig.FromMesh(_corpse.transform);
+            _organGraphic.Configure(_camera, corpsePlayer, rig, _corpse.transform);
             _organGraphic.raycastTarget = false;
-            _organGraphic.enabled = false;
+            _organGraphic.enabled = Plugin.ShouldShowInspectionAnatomy.Value;
+        }
+
+        private void LogCorpseAnatomyPose(Player corpsePlayer)
+        {
+            if (OrganSystem.DebugLogging == null ||
+                !OrganSystem.DebugLogging.Value)
+                return;
+
+            PlayerBones bones = _corpse.GetComponentInChildren<PlayerBones>();
+            TraumaLog.Info($"[CorpseAnatomy] root name={_corpse.transform.name} " +
+                $"pos={_corpse.transform.position:F3} rot={_corpse.transform.eulerAngles:F1} " +
+                $"forward={_corpse.transform.forward:F3} up={_corpse.transform.up:F3}");
+            LogCorpseBone("head", bones?.Head);
+            LogCorpseBone("ribcage", bones?.Ribcage);
+            LogCorpseBone("pelvis", bones?.Pelvis);
+
+            AnatomyRig rig = AnatomyRig.FromMesh(_corpse.transform);
+            TraumaLog.Info($"[CorpseAnatomy] mesh leftCollar={GetTransformPath(rig.LeftCollarbone)} " +
+                $"rightCollar={GetTransformPath(rig.RightCollarbone)}");
+            if (rig.LeftCollarbone != null && rig.RightCollarbone != null)
+                TraumaLog.Info($"[CorpseAnatomy] mesh leftPos={rig.LeftCollarbone.position:F3} " +
+                    $"rightPos={rig.RightCollarbone.position:F3}");
+            if (AnatomyPoseSystem.TryResolveTorsoRotation(rig,
+                    out Quaternion torsoRotation))
+                TraumaLog.Info($"[CorpseAnatomy] resolved torso " +
+                    $"rot={torsoRotation.eulerAngles:F1} forward=" +
+                    $"{(torsoRotation * Vector3.forward):F3} up=" +
+                    $"{(torsoRotation * Vector3.up):F3}");
+
+            foreach (RigidbodySpawner spawner in _ragdoll._rigidbodySpawners)
+            {
+                if (spawner == null)
+                    continue;
+                Transform transform = spawner.transform;
+                TraumaLog.Info($"[CorpseAnatomy] ragdoll name={transform.name} " +
+                    $"path={GetTransformPath(transform)} pos={transform.position:F3} " +
+                    $"rot={transform.eulerAngles:F1} forward={transform.forward:F3} " +
+                    $"up={transform.up:F3} hasBody={spawner.Rigidbody != null}");
+            }
+        }
+
+        private static void LogCorpseBone(string label, BifacialTransform bone)
+        {
+            if (bone?.Original == null)
+            {
+                TraumaLog.Info($"[CorpseAnatomy] bone={label} missing");
+                return;
+            }
+
+            Transform original = bone.Original;
+            TraumaLog.Info($"[CorpseAnatomy] bone={label} imitation={bone.UseImitation} " +
+                $"livePos={bone.position:F3} liveRot={bone.rotation.eulerAngles:F1} " +
+                $"liveForward={bone.forward:F3} original={GetTransformPath(original)} " +
+                $"originalPos={original.position:F3} originalRot={original.eulerAngles:F1} " +
+                $"originalForward={original.forward:F3}");
+        }
+
+        private static string GetTransformPath(Transform transform)
+        {
+            if (transform == null)
+                return "<missing>";
+            string path = transform.name;
+            for (Transform parent = transform.parent; parent != null;
+                parent = parent.parent)
+                path = parent.name + "/" + path;
+            return path;
         }
 
         private Material CreateOverlayMaterial(Color color)
@@ -744,170 +823,42 @@ namespace TraumaCore.Features.WoundInspection
             return label;
         }
 
-        private readonly struct OrganLine
-        {
-            internal readonly Vector2 Start;
-            internal readonly Vector2 End;
-            internal readonly Color Color;
-            internal readonly float Thickness;
-
-            internal OrganLine(
-                Vector2 start, Vector2 end, Color color, float thickness)
-            {
-                Start = start;
-                End = end;
-                Color = color;
-                Thickness = thickness;
-            }
-        }
-
         private sealed class InspectionOrganGraphic : Graphic
         {
-            private const int EllipsoidSegments = 36;
-            private static readonly int[] BoxEdgeStart =
-                { 0, 2, 4, 6, 0, 1, 4, 5, 0, 1, 2, 3 };
-            private static readonly int[] BoxEdgeEnd =
-                { 1, 3, 5, 7, 2, 3, 6, 7, 4, 5, 6, 7 };
-            private readonly List<OrganLine> _lines = new(128);
-            private readonly Vector2[] _boxPoints = new Vector2[8];
+            private readonly List<AnatomyScreenLine> _lines = new(2048);
+            private readonly List<AnatomyOverlayLine> _anatomyLines = new(2048);
             private Camera _worldCamera;
             private Player _corpsePlayer;
+            private AnatomyRig _corpseRig;
+            private IReadOnlyDictionary<Transform, Transform> _bonesBySource;
 
-            internal void Configure(Camera worldCamera, Player corpsePlayer)
+            internal void Configure(Camera worldCamera, Player corpsePlayer,
+                AnatomyRig corpseRig, Transform corpseRoot)
             {
                 _worldCamera = worldCamera;
                 _corpsePlayer = corpsePlayer;
+                _corpseRig = corpseRig;
+                _bonesBySource = MeshSkeleton.CaptureLimbMapping(corpsePlayer, corpseRoot);
             }
 
             private void LateUpdate()
             {
-                if (!enabled)
-                    return;
-                BuildOrganOverlayGeometry();
+                if (!enabled) return;
+                _lines.Clear();
+                _anatomyLines.Clear();
+                if (_worldCamera != null && _corpsePlayer != null)
+                {
+                    AnatomyOverlayGeometry.Build(_corpseRig, _corpsePlayer,
+                        OrganSystem.GetTargetRules(_corpsePlayer), _anatomyLines, _bonesBySource);
+                    AnatomyOverlayRenderer.AppendGeometry(_worldCamera, rectTransform,
+                        _anatomyLines, _lines);
+                }
                 SetVerticesDirty();
             }
 
-            private void BuildOrganOverlayGeometry()
+            protected override void OnPopulateMesh(VertexHelper vertices)
             {
-                _lines.Clear();
-                if (_worldCamera == null || _corpsePlayer == null)
-                    return;
-                AddOrganShape(OrganSystem.Heart);
-                AddOrganShape(OrganSystem.Brain);
-                AddOrganShape(OrganSystem.LowerBrain);
-            }
-
-            private void AddOrganShape(OrganDefinition organ)
-            {
-                if (organ == null || organ.GetAnchor(_corpsePlayer) == null)
-                    return;
-                if (organ.Shape == OrganShape.Ellipsoid)
-                {
-                    AddOrganEllipsoid(organ);
-                    return;
-                }
-
-                Vector3 center = organ.WorldCenter(_corpsePlayer);
-                Quaternion rotation = organ.WorldRotation(_corpsePlayer);
-                Vector3 axisRight = rotation * Vector3.right;
-                Vector3 axisUp = rotation * Vector3.up;
-                Vector3 axisForward = rotation * Vector3.forward;
-                for (int index = 0; index < 8; index++)
-                {
-                    Vector3 sign = new Vector3(
-                        (index & 1) == 0 ? -1f : 1f,
-                        (index & 2) == 0 ? -1f : 1f,
-                        (index & 4) == 0 ? -1f : 1f);
-                    Vector3 corner = center +
-                        axisRight * organ.HalfExtents.x * sign.x +
-                        axisUp * organ.HalfExtents.y * sign.y +
-                        axisForward * organ.HalfExtents.z * sign.z;
-                    if (!TryProject(corner, out _boxPoints[index]))
-                        return;
-                }
-                Color color = ResolveOrganOverlayColor(organ);
-                for (int index = 0; index < BoxEdgeStart.Length; index++)
-                    _lines.Add(new OrganLine(
-                        _boxPoints[BoxEdgeStart[index]],
-                        _boxPoints[BoxEdgeEnd[index]], color, 2f));
-            }
-
-            private void AddOrganEllipsoid(OrganDefinition organ)
-            {
-                Vector3 center = organ.WorldCenter(_corpsePlayer);
-                Vector3 extents = organ.HalfExtents;
-                Quaternion rotation = organ.WorldRotation(_corpsePlayer);
-                Color color = ResolveOrganOverlayColor(organ);
-                for (int ring = 0; ring < 3; ring++)
-                {
-                    Vector2 previous = default;
-                    for (int index = 0; index <= EllipsoidSegments; index++)
-                    {
-                        float angle = index * Mathf.PI * 2f / EllipsoidSegments;
-                        float cosine = Mathf.Cos(angle);
-                        float sine = Mathf.Sin(angle);
-                        Vector3 local = ring == 0
-                            ? new Vector3(extents.x * cosine, extents.y * sine, 0f)
-                            : ring == 1
-                                ? new Vector3(extents.x * cosine, 0f,
-                                    extents.z * sine)
-                                : new Vector3(0f, extents.y * cosine,
-                                    extents.z * sine);
-                        if (!TryProject(center + rotation * local, out Vector2 point))
-                            return;
-                        if (index > 0)
-                            _lines.Add(new OrganLine(previous, point, color, 2f));
-                        previous = point;
-                    }
-                }
-            }
-
-            private bool TryProject(Vector3 world, out Vector2 local)
-            {
-                local = default;
-                Vector3 screen = _worldCamera.WorldToScreenPoint(world);
-                if (screen.z <= 0f || Screen.width <= 0 || Screen.height <= 0)
-                    return false;
-                if (_worldCamera.targetTexture == null &&
-                    _worldCamera.rect.width > 0f && _worldCamera.rect.height > 0f)
-                {
-                    screen.x /= _worldCamera.rect.width;
-                    screen.y /= _worldCamera.rect.height;
-                }
-                Rect rect = rectTransform.rect;
-                local = new Vector2(
-                    rect.xMin + screen.x * rect.width / Screen.width,
-                    rect.yMin + screen.y * rect.height / Screen.height);
-                return true;
-            }
-
-            private static Color ResolveOrganOverlayColor(OrganDefinition organ)
-            {
-                Color color = organ.Color;
-                color.a = organ == OrganSystem.Heart
-                    ? OrganSystem.HeartEspOpacity.Value
-                    : OrganSystem.BrainEspOpacity.Value;
-                return color;
-            }
-
-            protected override void OnPopulateMesh(VertexHelper vertexHelper)
-            {
-                vertexHelper.Clear();
-                foreach (OrganLine line in _lines)
-                {
-                    Vector2 delta = line.End - line.Start;
-                    if (delta.sqrMagnitude < 0.01f)
-                        continue;
-                    Vector2 normal = new Vector2(-delta.y, delta.x).normalized *
-                        line.Thickness * 0.5f;
-                    int vertex = vertexHelper.currentVertCount;
-                    vertexHelper.AddVert(line.Start - normal, line.Color, Vector2.zero);
-                    vertexHelper.AddVert(line.Start + normal, line.Color, Vector2.zero);
-                    vertexHelper.AddVert(line.End + normal, line.Color, Vector2.zero);
-                    vertexHelper.AddVert(line.End - normal, line.Color, Vector2.zero);
-                    vertexHelper.AddTriangle(vertex, vertex + 1, vertex + 2);
-                    vertexHelper.AddTriangle(vertex, vertex + 2, vertex + 3);
-                }
+                AnatomyOverlayRenderer.PopulateMesh(vertices, _lines);
             }
         }
 

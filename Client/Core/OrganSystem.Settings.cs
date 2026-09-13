@@ -7,14 +7,15 @@ namespace TraumaCore
     internal static partial class OrganSystem
     {
         internal static ConfigEntry<bool> Enabled, DebugEsp, DebugLogging,
-            ForceFragmentation, BloodEffects;
+            ForceFragmentation, BloodEffects, ShowCalibrationMannequin,
+            IsEntireHeadFatal;
         internal static ConfigEntry<float> DebugEspRange, DirectDamagePercent,
             FullWoundTotalDamageMultiplier, NonHeartDecayDuration,
-            LightBleedDamageMultiplier, HeavyBleedDamageMultiplier;
+            LightBleedDamageMultiplier, HeavyBleedDamageMultiplier,
+            HeadFullDamageDepth, HeadDamageFloor, ChestFullDamageDepth,
+            ChestDamageFloor;
         internal static ConfigEntry<float> BoneEspOpacity, HeartEspOpacity,
             BrainEspOpacity, RibcageEspOpacity;
-        private static ConfigEntry<float> RibcageMinimumDepthSetting,
-            SkullMinimumDepthSetting;
         internal static ConfigEntry<float> OneBlackedRetention, TwoBlackedRetention,
             ThreePlusBlackedRetention;
         internal static ConfigEntry<float> ArmLinkageMultiplier, LegLinkageMultiplier,
@@ -35,13 +36,13 @@ namespace TraumaCore
         internal static OrganDefinition Brain { get; private set; }
         internal static OrganDefinition LowerBrain { get; private set; }
         internal static readonly Vector3 CervicalBrainEndOffset =
-            new Vector3(0.07887324f, 0.04225352f, 0.009389671f);
+            new Vector3(78.87f, 42.25f, 9.39f) / 1000f;
         internal static readonly Vector3 CervicalChestEndOffset =
-            new Vector3(0.002347419f, -0.04225352f, -0.03286385f);
+            new Vector3(2.35f, -42.25f, -32.86f) / 1000f;
         internal static readonly Vector3 SpineChestEndOffset =
-            new Vector3(-6.77723E-11f, -0.03990611f, -0.0258216f);
+            new Vector3(0f, -39.91f, -25.82f) / 1000f;
         internal static readonly Vector3 SpinePelvisEndOffset =
-            new Vector3(-0.02112676f, -0.07981221f, -0.009389671f);
+            new Vector3(-21.13f, -79.81f, -9.39f) / 1000f;
 
         internal static void InitializeOrganSettings(ConfigFile config)
         {
@@ -65,6 +66,25 @@ namespace TraumaCore
                 Ui("Target total damage from a full-depth bullet wound after its natural bleed completes, relative to EFT post-armor damage",
                     "02 - Global Damage", "Full Wound Total Damage", 95,
                     new AcceptableValueRange<float>(1f, 1.5f)));
+            IsEntireHeadFatal = config.Bind("Damage", "EntireHeadFatal", false,
+                Ui("Treat every penetrating hit to the head as a fatal brain hit",
+                    "02 - Global Damage", "Entire Head Is Fatal", 90));
+            HeadFullDamageDepth = config.Bind("Damage", "HeadFullDamageDepth",
+                0.15f, Ui("Fraction of head depth needed for full wound damage",
+                    "02 - Global Damage", "Head Full-Damage Depth", 85,
+                    new AcceptableValueRange<float>(0.01f, 1f)));
+            HeadDamageFloor = config.Bind("Damage", "HeadDamageFloor", 0.75f,
+                Ui("Minimum direct-damage fraction for a grazing head wound",
+                    "02 - Global Damage", "Head Damage Floor", 84,
+                    new AcceptableValueRange<float>(0f, 1f)));
+            ChestFullDamageDepth = config.Bind("Damage", "ChestFullDamageDepth",
+                0.35f, Ui("Fraction of chest depth needed for full wound damage",
+                    "02 - Global Damage", "Chest Full-Damage Depth", 83,
+                    new AcceptableValueRange<float>(0.01f, 1f)));
+            ChestDamageFloor = config.Bind("Damage", "ChestDamageFloor", 0.50f,
+                Ui("Minimum direct-damage fraction for a grazing chest wound",
+                    "02 - Global Damage", "Chest Damage Floor", 82,
+                    new AcceptableValueRange<float>(0f, 1f)));
             BloodEffects = config.Bind("Visuals", "WorldBloodEffects", true,
                 Ui("Render procedural world-space blood particles from trauma wounds",
                     "01 - Feature Toggles", "Procedural World Blood", 20));
@@ -74,35 +94,25 @@ namespace TraumaCore
             DebugEsp = config.Bind("Debug", "OrganESP", false,
                 Ui("Render debug organ outlines", "09 - Debugging",
                     "Organ Hitbox ESP", 90));
+            ShowCalibrationMannequin = config.Bind("Debug",
+                "ShowCalibrationMannequin", false,
+                Ui("Build a diagnostic mannequin from the closest entity's real skinned renderers and bind skeleton",
+                    "09 - Debugging", "Show Calibration Mannequin", 89));
             DebugEspRange = config.Bind("Debug", "OrganESPRange", 100f,
                 Ui("Maximum debug ESP rendering distance in metres", "09 - Debugging",
                     "ESP Culling Range", 80, new AcceptableValueRange<float>(5f, 500f)));
-            HeartEspOpacity = BindEspOpacity(config, "HeartOpacity", 0.90f,
+            HeartEspOpacity = BindEspOpacity(config, "HeartOpacity", 0.500939f,
                 "Heart Opacity", 79);
-            BrainEspOpacity = BindEspOpacity(config, "BrainOpacity", 0.80f,
+            BrainEspOpacity = BindEspOpacity(config, "BrainOpacity", 0.400939f,
                 "Brain Opacity", 78);
-            BoneEspOpacity = BindEspOpacity(config, "BoneOpacity", 0.50f,
+            BoneEspOpacity = BindEspOpacity(config, "BoneOpacity", 0.09624413f,
                 "Bone Opacity", 77);
-            RibcageEspOpacity = BindEspOpacity(config, "RibcageOpacity", 0.35f,
+            RibcageEspOpacity = BindEspOpacity(config, "RibcageOpacity", 0.09647886f,
                 "Ribcage Opacity", 76);
             DebugLogging = config.Bind("Debug", "HitLogging", false,
                 Ui("Write TraumaCore diagnostic, warning, and error messages to the log",
                     "09 - Debugging", "Logging", 70));
-            RibcageMinimumDepthSetting = config.Bind("Debug Ribcage",
-                "MinimumChestDepth", 0.015f,
-                Ui("Chest travel required before the path counts as striking ribs (metres)",
-                    "09 - Debugging", "Ribcage Minimum Depth", 60,
-                    new AcceptableValueRange<float>(0.005f, 0.05f)));
-            SkullMinimumDepthSetting = config.Bind("Debug Skull",
-                "MinimumHeadDepth", 0.006f,
-                Ui("Head travel required before the path counts as striking the skull (metres)",
-                    "09 - Debugging", "Skull Minimum Depth", 59,
-                    new AcceptableValueRange<float>(0.002f, 0.02f)));
         }
-
-        internal static float RibcageMinimumDepth =>
-            RibcageMinimumDepthSetting.Value;
-        internal static float SkullMinimumDepth => SkullMinimumDepthSetting.Value;
 
         private static void BindTargetRules(ConfigFile config)
         {
@@ -227,21 +237,43 @@ namespace TraumaCore
 
         private static void CreateOrganDefinitions()
         {
-            Heart = new OrganDefinition("HEART", OrganAnchor.Chest, OrganShape.Box,
-                new Vector3(-0.0656f, -0.0014f, 0.05211f),
-                new Vector3(0.099f, 0.121f, 0.088f), 0.71079f,
+            Heart = new OrganDefinition("HEART", OrganAnchor.Chest,
+                OrganShape.Ellipsoid,
+                HeartOffset + Vector3.forward * HeartSize.z *
+                    (HeartForwardOffsetFraction + HeartSizeScale * 0.1f),
+                HeartSize * HeartSizeScale, HeartRotation,
                 new Color(1f, 0.1f, 0.15f, 0.95f));
+            CreateBrainDefinitions();
+        }
+
+        private static void CreateBrainDefinitions()
+        {
             Brain = new OrganDefinition("BRAIN 1", OrganAnchor.Head, OrganShape.Ellipsoid,
-                new Vector3(-0.1013986f, 0.0267507f, -0.0019f),
-                new Vector3(0.114989f, 0.1787899f, 0.12747f) * 0.95f,
+                AnatomyPoseSystem.Skull1CenterOffset,
+                AnatomyPoseSystem.Skull1Size * 0.95f,
                 Vector3.zero,
                 new Color(1f, 0.2f, 0.8f, 0.95f));
             LowerBrain = new OrganDefinition("BRAIN 2", OrganAnchor.Head, OrganShape.Ellipsoid,
-                new Vector3(-0.07322957f, -0.001197184f, -0.0019f),
-                new Vector3(0.124507f, 0.1056338f, 0.1098591f) * 0.95f,
+                Skull2Offset, Skull2Size * 0.9f,
                 new Vector3(0f, 0f, -90f),
                 new Color(0.75f, 0.12f, 1f, 0.95f));
         }
+
+        private const float HeartSizeScale = 1.025f;
+        private const float HeartForwardOffsetFraction = 0.025f;
+        private static readonly Vector3 HeartOffset =
+            new Vector3(-0.0136177f, 0.04238122f, 0.05963286f);
+        private static readonly Vector3 HeartSize =
+            new Vector3(0.09861502f, 0.1299765f, 0.09767605f);
+        private static readonly Vector3 HeartRotation =
+            new Vector3(0f, 0f, -25f);
+
+        // Skull 2 is rotated -90 degrees around its local Z axis. Its head-bone
+        // coordinates are up/down (X), forward/back (Y), and side-to-side (Z).
+        internal static readonly Vector3 Skull2Offset =
+            new Vector3(-52.01f, 22.28f, -1.9f) / 1000f;
+        internal static readonly Vector3 Skull2Size =
+            new Vector3(185f, 116.46f, 117.1f) / 1000f;
 
         private static ConfigDescription Ui(string description, string category,
             string displayName, int order, AcceptableValueBase acceptable = null)

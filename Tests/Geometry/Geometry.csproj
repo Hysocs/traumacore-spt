@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <SptRoot Condition="'$(SptRoot)' == ''">C:\SPT\4.1.5</SptRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../Client/TraumaCore.Client.csproj" AdditionalProperties="SkipDeploy=true;SkipPackage=true" />
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+</Project>

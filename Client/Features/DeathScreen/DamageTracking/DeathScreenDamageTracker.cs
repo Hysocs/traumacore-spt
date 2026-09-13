@@ -81,9 +81,7 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
                 profile.Id,
                 bodyPart);
 
-            Transform anchor = BodyPartAnchorResolver.Find(
-                victim.gameObject.transform,
-                bodyPart);
+            Transform anchor = BodyPartAnchorResolver.FindImpactAnchor(victim, bodyPart, damageInfo.HitPoint);
             if (anchor == null)
             {
                 if (OrganSystem.DebugLogging.Value)
@@ -102,7 +100,8 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
                     continue;
                 bool isSameProjectile = projectileIndex != int.MinValue
                     ? impact.ProjectileIndex == projectileIndex
-                    : (impact.LocalPoint - localPoint).sqrMagnitude < 0.000001f;
+                    : impact.AnchorName == anchor.name &&
+                        (impact.LocalPoint - localPoint).sqrMagnitude < 0.000001f;
                 if (!isSameProjectile)
                     continue;
 
@@ -123,7 +122,8 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
                     projectileIndex,
                     sequence,
                     default,
-                    default));
+                    default,
+                    default, anchor.name));
                 if (recordedDamage.Impacts.Count > MaximumImpactsPerBodyPart)
                     recordedDamage.Impacts.RemoveAt(0);
                 LatestImpactSequenceByProfileId[profile.Id] = sequence;
@@ -139,32 +139,26 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
         internal static void CaptureTrajectory(
             Profile profile,
             Player victim,
-            EBodyPart bodyPart,
-            Vector3 entryPoint,
-            Vector3 direction,
-            EDamageType damageType,
-            int fireIndex,
-            int projectileIndex,
-            WoundBallistics wound)
+            TraumaController.ImpactCapture capture)
         {
             if (profile == null || string.IsNullOrEmpty(profile.Id) || victim == null)
                 return;
 
-            BodyPartDamageRecord damage = FindOrCreateBodyPartDamage(
-                profile.Id, bodyPart);
+            BodyPartDamageRecord damage = FindOrCreateBodyPartDamage(profile.Id,
+                capture.BodyPart);
 
-            Transform anchor = BodyPartAnchorResolver.Find(
-                victim.Transform.Original, bodyPart);
+            Transform anchor = BodyPartAnchorResolver.FindImpactAnchor(victim, capture.BodyPart, capture.HitPoint);
             if (anchor == null)
                 return;
 
-            Vector3 localEntry = anchor.InverseTransformPoint(entryPoint);
+            Vector3 localEntry = anchor.InverseTransformPoint(capture.HitPoint);
             int closestIndex = -1;
             float closestDistance = float.MaxValue;
             for (int index = 0; index < damage.Impacts.Count; index++)
             {
-                if (damage.Impacts[index].FireIndex != fireIndex ||
-                    damage.Impacts[index].ProjectileIndex != projectileIndex)
+                if (damage.Impacts[index].FireIndex != capture.FireIndex ||
+                    damage.Impacts[index].ProjectileIndex != capture.ProjectileIndex ||
+                    damage.Impacts[index].AnchorName != anchor.name)
                     continue;
                 float distance = (damage.Impacts[index].LocalPoint - localEntry).sqrMagnitude;
                 if (distance >= closestDistance)
@@ -173,24 +167,27 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
                 closestIndex = index;
             }
             Vector3 localDirection =
-                anchor.InverseTransformDirection(direction).normalized;
-            HitPenetrationRecord penetration = new HitPenetrationRecord(wound);
-            WoundTrajectory trajectory = WoundTrajectory.Create(
-                wound, direction).ToLocal(anchor);
+                anchor.InverseTransformDirection(capture.Direction).normalized;
+            HitPenetrationRecord penetration = new HitPenetrationRecord(
+                capture.Wound);
+            WoundTrajectory trajectory = WoundTrajectory.Create(capture.Wound,
+                capture.Direction).ToLocal(anchor);
+            HitAnatomyRecord anatomy = new HitAnatomyRecord(anchor, capture);
             if (closestIndex < 0 || closestDistance > 0.01f)
             {
                 int sequence = ++_nextImpactSequence;
                 damage.Impacts.Add(new BulletImpactRecord(
                     localEntry,
                     localDirection,
-                    Mathf.Max(0f, wound.TraveledDepth),
-                    wound.PassedThrough,
-                    damageType,
-                    fireIndex,
-                    projectileIndex,
+                    Mathf.Max(0f, capture.Wound.TraveledDepth),
+                    capture.Wound.PassedThrough,
+                    capture.DamageType,
+                    capture.FireIndex,
+                    capture.ProjectileIndex,
                     sequence,
                     penetration,
-                    trajectory));
+                    trajectory,
+                    anatomy, anchor.name));
                 if (damage.Impacts.Count > MaximumImpactsPerBodyPart)
                     damage.Impacts.RemoveAt(0);
                 LatestImpactSequenceByProfileId[profile.Id] = sequence;
@@ -200,16 +197,17 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
 
             BulletImpactRecord impact = damage.Impacts[closestIndex];
             damage.Impacts[closestIndex] = new BulletImpactRecord(
-                impact.LocalPoint,
+                localEntry,
                 localDirection,
-                Mathf.Max(0f, wound.TraveledDepth),
-                wound.PassedThrough,
+                Mathf.Max(0f, capture.Wound.TraveledDepth),
+                capture.Wound.PassedThrough,
                 impact.DamageType,
                 impact.FireIndex,
                 impact.ProjectileIndex,
                 impact.Sequence,
                 penetration,
-                trajectory);
+                trajectory,
+                anatomy, anchor.name);
         }
 
         internal static bool TryGetRecordedDamage(
@@ -285,6 +283,7 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
 
         internal readonly struct BulletImpactRecord
         {
+            public readonly string AnchorName;
             public readonly Vector3 LocalPoint;
             public readonly Vector3 LocalDirection;
             public readonly float TraveledDepth;
@@ -295,6 +294,7 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
             public readonly int Sequence;
             public readonly HitPenetrationRecord Penetration;
             public readonly WoundTrajectory Trajectory;
+            public readonly HitAnatomyRecord Anatomy;
 
             public bool HasWoundTrajectory =>
                 Trajectory.HasPath;
@@ -309,7 +309,8 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
                 int projectileIndex,
                 int sequence,
                 HitPenetrationRecord penetration,
-                WoundTrajectory trajectory)
+                WoundTrajectory trajectory,
+                HitAnatomyRecord anatomy, string anchorName = null)
             {
                 LocalPoint = localPoint;
                 LocalDirection = localDirection;
@@ -321,6 +322,42 @@ namespace TraumaCore.Features.DeathScreen.DamageTracking
                 Sequence = sequence;
                 Penetration = penetration;
                 Trajectory = trajectory;
+                Anatomy = anatomy;
+                AnchorName = anchorName;
+            }
+        }
+
+        internal readonly struct HitAnatomyRecord
+        {
+            internal readonly Vector3 LocalSurfaceNormal;
+            internal readonly Vector3 LocalIntersection;
+            internal readonly Vector3 LocalBoneIntersection;
+            internal readonly bool Heart;
+            internal readonly bool Brain;
+            internal readonly bool CervicalSpine;
+            internal readonly bool ThoracicSpine;
+            internal readonly bool Ribcage;
+            internal readonly bool Skull;
+            internal readonly bool LimbBone;
+
+            internal bool HasCustomHit => Heart || Brain || CervicalSpine ||
+                ThoracicSpine || Ribcage || Skull || LimbBone;
+
+            internal HitAnatomyRecord(Transform anchor,
+                TraumaController.ImpactCapture capture)
+            {
+                LocalSurfaceNormal = anchor.InverseTransformDirection(capture.HitNormal).normalized;
+                LocalIntersection = anchor.InverseTransformPoint(
+                    capture.Intersection);
+                LocalBoneIntersection = anchor.InverseTransformPoint(
+                    capture.BoneIntersection);
+                Heart = capture.Heart;
+                Brain = capture.Brain;
+                CervicalSpine = capture.CervicalSpine;
+                ThoracicSpine = capture.ThoracicSpine;
+                Ribcage = capture.Ribcage;
+                Skull = capture.Skull;
+                LimbBone = capture.Bone;
             }
         }
 
